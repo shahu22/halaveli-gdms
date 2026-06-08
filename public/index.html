@@ -93,7 +93,9 @@
   tbody td{padding:9px 10px;font-size:13px;vertical-align:middle}
   .name-cell{font-weight:500;min-width:230px}
   .conf-cell{font-variant-numeric:tabular-nums;color:var(--sea-deep);font-weight:500}
-  .flagwrap{display:flex;gap:4px}
+  .flagwrap{display:flex;gap:4px;align-items:center}
+  .stay-badge{font-size:10px;font-weight:700;background:var(--sea);color:#fff;border-radius:6px;padding:2px 6px;white-space:nowrap}
+  .remarks-cell{font-size:12px;color:var(--ink-soft);max-width:180px}
   .flag{width:25px;height:25px;border-radius:7px;display:grid;place-items:center;font-size:12px;border:1px solid var(--line);background:var(--sand);cursor:pointer;user-select:none}
   .flag.on.hm{background:var(--coral);border-color:var(--coral);color:#fff}
   .flag.on.an{background:var(--gold);border-color:var(--gold);color:#fff}
@@ -285,8 +287,8 @@
 
       <div class="card"><div class="scroll"><table>
         <thead><tr>
-          <th>Flags</th><th>Villa</th><th>Nat.</th><th>Departure</th><th>MP</th>
-          <th>Name</th><th>Confirmation</th><th>Docs</th><th></th>
+          <th>Flags</th><th>Villa</th><th>Nat.</th><th>Arrival</th><th>Departure</th><th>MP</th>
+          <th>Name</th><th>Remarks</th><th>Confirmation</th><th>Docs</th><th></th>
         </tr></thead>
         <tbody id="gbody"></tbody>
       </table></div></div>
@@ -489,19 +491,30 @@ function renderGuests(){
         <span class="flag hm ${g.hm?'on':''}" data-f="hm" title="Honeymoon">♡</span>
         <span class="flag an ${g.anniversary?'on':''}" data-f="anniversary" title="Anniversary">⚭</span>
         <span class="flag rp ${g.repeater?'on':''}" data-f="repeater" title="Repeater">★</span>
+        ${g.repeater&&g.repeater_count?`<span class="stay-badge" title="Stay number">${esc(g.repeater_count)}</span>`:''}
       </div></td>
       <td><strong>${esc(g.villa)}</strong><div style="font-size:10px;color:var(--ink-soft)">${esc(g.villa_type||'')}</div></td>
       <td>${esc(g.nationality||'—')}</td>
+      <td>${esc(g.arrival||'')}</td>
       <td>${esc(g.departure||'')}</td>
       <td><span class="badge ${mpClass(g.meal_plan)}">${esc(g.meal_plan||'—')}</span></td>
       <td class="name-cell">${esc(g.name)}</td>
+      <td class="remarks-cell" title="${esc(g.remarks||'')}">${esc((g.remarks||'').slice(0,40))}${(g.remarks||'').length>40?'…':''}</td>
       <td class="conf-cell">${esc(g.confirmation)}</td>
       <td><span class="doc-count" data-id="${g.id}">·</span></td>
       <td><button class="linkbtn" data-open="${g.id}">Open</button></td>
-    </tr>`).join('') : `<tr><td colspan="9"><div class="empty">No ${state.listType} guests yet. Use “Import Opera Export”.</div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType} guests yet. Use “Import Opera Export”.</div></td></tr>`;
   tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
     const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
-    const field=f.dataset.f;g[field]=!g[field];await api.put('/api/guests/'+id,{[field]:g[field]});renderGuests();
+    const field=f.dataset.f;g[field]=!g[field];
+    const patch={[field]:g[field]};
+    // when turning ON repeater, ask which stay number (manual entry)
+    if(field==='repeater'&&g[field]){
+      const n=prompt('Which stay is this for the guest? (e.g. "2nd", "5th")', g.repeater_count||'');
+      if(n!==null){g.repeater_count=n.trim();patch.repeater_count=g.repeater_count;}
+    }
+    if(field==='repeater'&&!g[field]){g.repeater_count='';patch.repeater_count='';}
+    await api.put('/api/guests/'+id,patch);renderGuests();
   });
   tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
   // load doc counts
@@ -534,21 +547,28 @@ function renderPanel(){
       <div class="toggle an ${g.anniversary?'on':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
       <div class="toggle rp ${g.repeater?'on':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
     </div>
+    <div class="field ${g.repeater?'':'hidden'}" id="stayWrap" style="margin-top:8px">
+      <label>Which stay is this? (manual — from guest profile notes)</label>
+      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th">
+    </div>
 
     <div class="section-title">Guest Details</div>
     <div class="grid2">
       <div class="field"><label>Villa</label><input id="f_villa" value="${esc(g.villa)}"></div>
       <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry"></div>
+      <div class="field"><label>Arrival</label><input id="f_arrival" value="${esc(g.arrival||'')}"></div>
       <div class="field"><label>Departure</label><input id="f_departure" value="${esc(g.departure||'')}"></div>
-      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}"></div>
+      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown"></div>
       <div class="field"><label>Confirmation</label><input id="f_confirmation" value="${esc(g.confirmation)}"></div>
-      <div class="field"><label>List</label>
+      <div class="field" style="grid-column:1/-1"><label>List</label>
         <select id="f_list_type">
           <option value="arrival" ${g.list_type==='arrival'?'selected':''}>Arrival</option>
           <option value="inhouse" ${g.list_type==='inhouse'?'selected':''}>In-House</option>
           <option value="departure" ${g.list_type==='departure'?'selected':''}>Departure</option>
         </select></div>
     </div>
+    <div class="field"><label>Remarks / Booking Notes</label>
+      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical">${esc(g.remarks||'')}</textarea></div>
 
     <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
     <div class="preview" id="namePrev">${esc(g.name)}</div>
@@ -574,7 +594,9 @@ function renderPanel(){
   `;
 
   body.querySelectorAll('.toggle').forEach(t=>t.onclick=async()=>{
-    const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');await api.put('/api/guests/'+g.id,{[f]:g[f]});
+    const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');
+    if(f==='repeater'){document.getElementById('stayWrap').classList.toggle('hidden',!g[f]);}
+    await api.put('/api/guests/'+g.id,{[f]:g[f]});
   });
   buildNameEditor();
   document.getElementById('saveDetails').onclick=saveDetails;
@@ -614,8 +636,8 @@ function buildNameEditor(){
 
 async function saveDetails(){
   const g=panelGuest;
-  const patch={};['villa','nationality','departure','meal_plan','confirmation','name','list_type'].forEach(k=>{
-    patch[k]=document.getElementById('f_'+k).value;});
+  const patch={};['villa','nationality','arrival','departure','meal_plan','confirmation','name','list_type','remarks','repeater_count'].forEach(k=>{
+    const el=document.getElementById('f_'+k);if(el)patch[k]=el.value;});
   await api.put('/api/guests/'+g.id,patch);Object.assign(g,patch);toast('Saved');
   document.getElementById('pSub').textContent=`${g.confirmation} · ${g.meal_plan||''} · ${g.list_type}`;
 }
