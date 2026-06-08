@@ -184,14 +184,20 @@ function normDate(raw) {
 }
 
 // ---- Meal-plan derivation -------------------------------------------------
-// CHM uses product codes; we map common patterns to AIP/FB/HB/BB.
+// CHM uses product codes. We only return a plan when the codes clearly imply
+// one. FB is intentionally NEVER auto-assigned (it's used only for management
+// / fam-trip guests and isn't a standard guest plan) — staff set it manually
+// if needed. When nothing is clearly identifiable we return "" (shown as "-").
 function deriveMealPlan(products, rateCode) {
   const p = (products || "").toUpperCase();
-  if (/JDIN|JLUN|JBKF|MINBAW|DIAUS|LUAUS|BFAUS/.test(p) && /MINBAW|JBVB|JBVR/.test(p)) return "AIP";
-  if (/DIAUS|DICUS/.test(p) && /BFAUS/.test(p)) return "FB";
-  if (/MSAUSBBHB|MSCUSBBHB/.test(p)) return "HB";
-  if (/BFAUS|BFCUS/.test(p)) return "BB";
-  if (/JBKF|JDIN|JLUN/.test(p)) return "AIP";
+  // All-inclusive: needs the all-inclusive beverage/minibar marker alongside meals
+  if (/MINBAW|JBVB|JBVR/.test(p) && /JDIN|JLUN|JBKF|DIAUS|LUAUS|BFAUS/.test(p)) return "AIP";
+  // Half board: explicit HB product codes
+  if (/MSAUSBBHB|MSCUSBBHB|\bHB\b/.test(p)) return "HB";
+  // Bed & breakfast: breakfast present, no dinner/lunch products
+  if (/BFAUS|BFCUS/.test(p) && !/JDIN|JLUN|DIAUS|LUAUS|DICUS|LUCUS/.test(p)) return "BB";
+  // All-inclusive via core Jahaz meal codes (breakfast+lunch+dinner)
+  if (/JBKF/.test(p) && /JLUN/.test(p) && /JDIN/.test(p)) return "AIP";
   return "";
 }
 
