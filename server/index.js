@@ -361,7 +361,7 @@ app.get("/api/guests/:id", auth, (req, res) => {
 
 app.put("/api/guests/:id", auth, (req, res) => {
   const allowed = ["villa","villa_type","arrival","departure","meal_plan","nationality",
-    "confirmation","name","adults","children","hm","anniversary","repeater","remarks","list_type"];
+    "confirmation","name","adults","children","hm","anniversary","repeater","repeater_count","remarks","list_type"];
   const sets = [], vals = [];
   for (const k of allowed) {
     if (k in req.body) { sets.push(`${k}=?`);
