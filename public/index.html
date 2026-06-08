@@ -124,6 +124,8 @@
   .section-title:first-child{margin-top:0}
 
   .toggle-row{display:flex;gap:8px;margin-bottom:8px}
+  .lockbar{background:var(--gold-soft);color:var(--gold);border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:500;margin-bottom:14px;line-height:1.5}
+  .toggle.lk{opacity:.6;cursor:not-allowed}
   .toggle{flex:1;border:1.5px solid var(--line);border-radius:11px;padding:11px;text-align:center;cursor:pointer;background:var(--white)}
   .toggle .ti{font-size:18px}
   .toggle .tl{font-size:10px;font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
@@ -259,17 +261,16 @@
         <select id="daySelect"></select>
         <span class="pill open" id="dayStatus">open</span>
         <button class="btn btn-ghost btn-sm" id="newDayBtn">+ New Day</button>
-        <button class="btn btn-ghost btn-sm" id="importBtn">⬆ Import Opera Export</button>
+        <button class="btn btn-ghost btn-sm" id="importBtn">⬆ Import Arrivals</button>
+        <button class="btn btn-ghost btn-sm hidden" id="newBookingBtn">+ New Booking</button>
         <div class="spacer"></div>
-        <button class="btn btn-ghost btn-sm" id="closeDayBtn">Close &amp; Roll to Next Day</button>
       </div>
 
       <div class="importbox hidden" id="importBox">
-        <strong>Paste tab-delimited Opera export</strong> (Arrival res_detail or Departure report)
-        <textarea id="importText" placeholder="Paste the full exported text here…"></textarea>
+        <strong>Paste tab-delimited Opera arrivals export</strong> (res_detail)
+        <textarea id="importText" placeholder="Paste the full exported arrivals text here…"></textarea>
         <div style="display:flex;gap:8px;justify-content:center">
-          <div class="seg"><button id="impArr" class="on">Arrivals</button><button id="impDep">Departures</button></div>
-          <button class="btn btn-primary btn-sm" style="width:auto" id="doImport">Import</button>
+          <button class="btn btn-primary btn-sm" style="width:auto" id="doImport">Import Arrivals</button>
           <button class="btn btn-ghost btn-sm" id="cancelImport">Cancel</button>
         </div>
       </div>
@@ -403,6 +404,8 @@ async function boot(){
   showApp();
   document.getElementById('whoami').textContent=state.user.display_name||state.user.username;
   document.getElementById('navAdmin').style.display=state.user.role==='admin'?'':'none';
+  document.getElementById('newBookingBtn').classList.toggle('hidden',state.user.role!=='admin');
+  state.isAdmin=state.user.role==='admin';
   const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
   state.canManage=!!t.canManage;
   document.getElementById('navTemplates').style.display=state.canManage?'':'none';
@@ -439,31 +442,48 @@ document.getElementById('newDayBtn').onclick=()=>openModal(`
       state.dayId=d.id;document.getElementById('daySelect').value=d.id;updateDayStatus();await loadGuests();toast('Day created');
     };
   });
-document.getElementById('closeDayBtn').onclick=async()=>{
-  if(!confirm('Close this day and create the next one? Current guests remain accessible in In-House.'))return;
-  await api.post('/api/days/'+state.dayId+'/close');
-  // move arrivals to in-house
-  for(const g of state.guests.filter(x=>x.list_type==='arrival')){await api.post('/api/guests/'+g.id+'/to-inhouse');}
-  const next=new Date();next.setDate(next.getDate()+1);
-  const d=await api.post('/api/days',{date:next.toISOString().slice(0,10)});
-  await loadDays();state.dayId=d.id;document.getElementById('daySelect').value=d.id;updateDayStatus();await loadGuests();
-  toast('Rolled to next day');
-};
 
-/* ---------- IMPORT ---------- */
-let importKind='arrival';
+/* ---------- IMPORT (arrivals only) ---------- */
 document.getElementById('importBtn').onclick=()=>document.getElementById('importBox').classList.toggle('hidden');
 document.getElementById('cancelImport').onclick=()=>document.getElementById('importBox').classList.add('hidden');
-document.getElementById('impArr').onclick=()=>{importKind='arrival';document.getElementById('impArr').classList.add('on');document.getElementById('impDep').classList.remove('on');};
-document.getElementById('impDep').onclick=()=>{importKind='departure';document.getElementById('impDep').classList.add('on');document.getElementById('impArr').classList.remove('on');};
 document.getElementById('doImport').onclick=async()=>{
   const text=document.getElementById('importText').value.trim();
-  if(!text)return toast('Paste the export first');
-  const r=await api.post('/api/import',{dayId:state.dayId,kind:importKind,text});
+  if(!text)return toast('Paste the arrivals export first');
+  const r=await api.post('/api/import',{dayId:state.dayId,text});
   document.getElementById('importBox').classList.add('hidden');document.getElementById('importText').value='';
-  toast(`Imported ${r.added} of ${r.parsed} ${r.listType} guests`);
-  state.listType=r.listType;syncListSeg();await loadGuests();
+  toast(`Imported ${r.added} of ${r.parsed} arrivals`);
+  state.listType='arrival';syncListSeg();await loadGuests();
 };
+
+/* ---------- NEW BOOKING (admin) ---------- */
+document.getElementById('newBookingBtn').onclick=()=>openModal(`
+  <h3>New Booking</h3>
+  <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div class="field"><label>Villa</label><input id="nb_villa"></div>
+    <div class="field"><label>Confirmation</label><input id="nb_confirmation"></div>
+    <div class="field"><label>Arrival (e.g. 09-Jun-2026)</label><input id="nb_arrival"></div>
+    <div class="field"><label>Departure</label><input id="nb_departure"></div>
+    <div class="field"><label>Arrival Flight</label><input id="nb_arrival_flight"></div>
+    <div class="field"><label>Departure Flight</label><input id="nb_departure_flight"></div>
+  </div>
+  <div class="field"><label>Lead Guest — Title / First / Last</label>
+    <div style="display:flex;gap:6px">
+      <select id="nb_title">${['Mrs','Mr','Ms','Miss','Dr'].map(t=>`<option>${t}</option>`).join('')}</select>
+      <input id="nb_first" placeholder="First"><input id="nb_last" placeholder="Last">
+    </div></div>
+  <div class="field"><label>Meal Plan</label><input id="nb_meal_plan" placeholder="e.g. AIP (optional)"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="nb_save">Create Booking</button></div>`,()=>{
+    document.getElementById('nb_save').onclick=async()=>{
+      const g={title:document.getElementById('nb_title').value,first:document.getElementById('nb_first').value,last:document.getElementById('nb_last').value,role:'adult'};
+      const body={day_id:state.dayId,list_type:'arrival',
+        villa:document.getElementById('nb_villa').value,confirmation:document.getElementById('nb_confirmation').value,
+        arrival:document.getElementById('nb_arrival').value,departure:document.getElementById('nb_departure').value,
+        arrival_flight:document.getElementById('nb_arrival_flight').value,departure_flight:document.getElementById('nb_departure_flight').value,
+        meal_plan:document.getElementById('nb_meal_plan').value,guests:[g]};
+      await api.post('/api/guests',body);closeModal();toast('Booking created');await loadGuests();
+    };
+  });
 
 /* ---------- GUEST LIST ---------- */
 function syncListSeg(){document.querySelectorAll('#listSeg button').forEach(b=>b.classList.toggle('on',b.dataset.lt===state.listType));}
@@ -502,19 +522,26 @@ function renderGuests(){
       <td class="remarks-cell" title="${esc(g.remarks||'')}">${esc((g.remarks||'').slice(0,40))}${(g.remarks||'').length>40?'…':''}</td>
       <td class="conf-cell">${esc(g.confirmation)}</td>
       <td><span class="doc-count" data-id="${g.id}">·</span></td>
-      <td><button class="linkbtn" data-open="${g.id}">Open</button></td>
-    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType} guests yet. Use “Import Opera Export”.</div></td></tr>`;
+      <td style="white-space:nowrap">
+        ${state.listType==='arrival'?`<button class="btn btn-coral btn-sm" data-checkin="${g.id}" style="margin-right:4px">Check In</button>`:''}
+        <button class="linkbtn" data-open="${g.id}">Open</button></td>
+    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
   tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
     const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
     const field=f.dataset.f;g[field]=!g[field];
     const patch={[field]:g[field]};
-    // when turning ON repeater, ask which stay number (manual entry)
     if(field==='repeater'&&g[field]){
       const n=prompt('Which stay is this for the guest? (e.g. "2nd", "5th")', g.repeater_count||'');
       if(n!==null){g.repeater_count=n.trim();patch.repeater_count=g.repeater_count;}
     }
     if(field==='repeater'&&!g[field]){g.repeater_count='';patch.repeater_count='';}
-    await api.put('/api/guests/'+id,patch);renderGuests();
+    try{await api.put('/api/guests/'+id,patch);}catch(err){toast(err.message);await loadGuests();return;}
+    renderGuests();
+  });
+  tb.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Check in this villa? It will move to In-House and be locked for editing.'))return;
+    try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin');toast('Checked in');await loadGuests();}
+    catch(err){toast(err.message);}
   });
   tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
   // load doc counts
@@ -541,40 +568,40 @@ function renderPanel(){
   const body=document.getElementById('panelBody');
   const byCat={};state.templates.forEach(t=>{(byCat[t.category]=byCat[t.category]||[]).push(t);});
   const selectedIds=new Set(panelDocs.map(d=>d.template_id));
+  const locked=(g.list_type==='inhouse')&&!state.isAdmin;     // staff can't edit in-house
+  const dis=locked?'disabled':'';
+  const adminDis=state.isAdmin?'':'disabled';                 // dates/flights admin-only
   body.innerHTML=`
+    ${locked?`<div class="lockbar">🔒 This booking is checked in and locked. You can still generate documents below. Ask an admin to change details.</div>`:''}
     <div class="toggle-row">
-      <div class="toggle hm ${g.hm?'on':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
-      <div class="toggle an ${g.anniversary?'on':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
-      <div class="toggle rp ${g.repeater?'on':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
+      <div class="toggle hm ${g.hm?'on':''} ${locked?'lk':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
+      <div class="toggle an ${g.anniversary?'on':''} ${locked?'lk':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
+      <div class="toggle rp ${g.repeater?'on':''} ${locked?'lk':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
     </div>
     <div class="field ${g.repeater?'':'hidden'}" id="stayWrap" style="margin-top:8px">
       <label>Which stay is this? (manual — from guest profile notes)</label>
-      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th">
+      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th" ${dis}>
     </div>
 
     <div class="section-title">Guest Details</div>
     <div class="grid2">
-      <div class="field"><label>Villa</label><input id="f_villa" value="${esc(g.villa)}"></div>
-      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry"></div>
-      <div class="field"><label>Arrival</label><input id="f_arrival" value="${esc(g.arrival||'')}"></div>
-      <div class="field"><label>Departure</label><input id="f_departure" value="${esc(g.departure||'')}"></div>
-      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown"></div>
-      <div class="field"><label>Confirmation</label><input id="f_confirmation" value="${esc(g.confirmation)}"></div>
-      <div class="field" style="grid-column:1/-1"><label>List</label>
-        <select id="f_list_type">
-          <option value="arrival" ${g.list_type==='arrival'?'selected':''}>Arrival</option>
-          <option value="inhouse" ${g.list_type==='inhouse'?'selected':''}>In-House</option>
-          <option value="departure" ${g.list_type==='departure'?'selected':''}>Departure</option>
-        </select></div>
+      <div class="field"><label>Villa ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_villa" value="${esc(g.villa)}" ${adminDis}></div>
+      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry" ${dis}></div>
+      <div class="field"><label>Arrival ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival" value="${esc(g.arrival||'')}" ${adminDis}></div>
+      <div class="field"><label>Departure ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure" value="${esc(g.departure||'')}" ${adminDis}></div>
+      <div class="field"><label>Arrival Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival_flight" value="${esc(g.arrival_flight||'')}" ${adminDis}></div>
+      <div class="field"><label>Departure Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure_flight" value="${esc(g.departure_flight||'')}" ${adminDis}></div>
+      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown" ${dis}></div>
+      <div class="field"><label>Confirmation ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_confirmation" value="${esc(g.confirmation)}" ${adminDis}></div>
     </div>
     <div class="field"><label>Remarks / Booking Notes</label>
-      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical">${esc(g.remarks||'')}</textarea></div>
+      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical" ${dis}>${esc(g.remarks||'')}</textarea></div>
 
     <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
     <div class="preview" id="namePrev">${esc(g.name)}</div>
-    <div class="nameedit" id="nameEdit"></div>
+    <div class="nameedit ${locked?'hidden':''}" id="nameEdit"></div>
     <input id="f_name" type="hidden" value="${esc(g.name)}">
-    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
+    <div style="margin-top:8px" class="${locked?'hidden':''}"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
 
     <div class="section-title">Vouchers &amp; Documents</div>
     ${Object.keys(byCat).map(cat=>`
@@ -594,12 +621,12 @@ function renderPanel(){
   `;
 
   body.querySelectorAll('.toggle').forEach(t=>t.onclick=async()=>{
+    if(locked)return;
     const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');
     if(f==='repeater'){document.getElementById('stayWrap').classList.toggle('hidden',!g[f]);}
     await api.put('/api/guests/'+g.id,{[f]:g[f]});
   });
-  buildNameEditor();
-  document.getElementById('saveDetails').onclick=saveDetails;
+  if(!locked){buildNameEditor();const sd=document.getElementById('saveDetails');if(sd)sd.onclick=saveDetails;}
   body.querySelectorAll('.vopt').forEach(v=>v.onclick=()=>toggleVoucher(v.dataset.tpl,v));
   renderDocList();
 }
@@ -636,9 +663,10 @@ function buildNameEditor(){
 
 async function saveDetails(){
   const g=panelGuest;
-  const patch={};['villa','nationality','arrival','departure','meal_plan','confirmation','name','list_type','remarks','repeater_count'].forEach(k=>{
-    const el=document.getElementById('f_'+k);if(el)patch[k]=el.value;});
-  await api.put('/api/guests/'+g.id,patch);Object.assign(g,patch);toast('Saved');
+  const patch={};['villa','nationality','arrival','departure','arrival_flight','departure_flight','meal_plan','confirmation','name','remarks','repeater_count'].forEach(k=>{
+    const el=document.getElementById('f_'+k);if(el&&!el.disabled)patch[k]=el.value;});
+  try{await api.put('/api/guests/'+g.id,patch);}catch(e){return toast(e.message);}
+  Object.assign(g,patch);toast('Saved');
   document.getElementById('pSub').textContent=`${g.confirmation} · ${g.meal_plan||''} · ${g.list_type}`;
 }
 
