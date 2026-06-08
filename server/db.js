@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS guests (
   name TEXT, guests_json TEXT,
   adults INTEGER DEFAULT 1, children INTEGER DEFAULT 0,
   hm INTEGER DEFAULT 0, anniversary INTEGER DEFAULT 0, repeater INTEGER DEFAULT 0,
+  repeater_count TEXT,
   special_requests TEXT, suggested_vouchers TEXT, remarks TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   FOREIGN KEY (day_id) REFERENCES business_days(id)
@@ -112,6 +113,11 @@ try {
   const cols = db.prepare("PRAGMA table_info(documents)").all().map((c) => c.name);
   if (!cols.includes("lang"))
     db.exec("ALTER TABLE documents ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'");
+} catch (e) {}
+try {
+  const cols = db.prepare("PRAGMA table_info(guests)").all().map((c) => c.name);
+  if (!cols.includes("repeater_count"))
+    db.exec("ALTER TABLE guests ADD COLUMN repeater_count TEXT");
 } catch (e) {}
 
 // ---- Seed admin on first run ---------------------------------------------
