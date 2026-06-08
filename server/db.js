@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS guests (
   day_id INTEGER,
   list_type TEXT NOT NULL DEFAULT 'arrival',
   villa TEXT, villa_type TEXT, arrival TEXT, departure TEXT,
+  arrival_flight TEXT, departure_flight TEXT,
+  checked_in_at TEXT, status TEXT NOT NULL DEFAULT 'active',
   meal_plan TEXT, nationality TEXT, confirmation TEXT,
   name TEXT, guests_json TEXT,
   adults INTEGER DEFAULT 1, children INTEGER DEFAULT 0,
@@ -118,6 +120,14 @@ try {
   const cols = db.prepare("PRAGMA table_info(guests)").all().map((c) => c.name);
   if (!cols.includes("repeater_count"))
     db.exec("ALTER TABLE guests ADD COLUMN repeater_count TEXT");
+  if (!cols.includes("arrival_flight"))
+    db.exec("ALTER TABLE guests ADD COLUMN arrival_flight TEXT");
+  if (!cols.includes("departure_flight"))
+    db.exec("ALTER TABLE guests ADD COLUMN departure_flight TEXT");
+  if (!cols.includes("checked_in_at"))
+    db.exec("ALTER TABLE guests ADD COLUMN checked_in_at TEXT");
+  if (!cols.includes("status"))
+    db.exec("ALTER TABLE guests ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
 } catch (e) {}
 
 // ---- Seed admin on first run ---------------------------------------------
