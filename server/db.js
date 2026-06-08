@@ -7,11 +7,15 @@
 // ============================================================================
 const Database = require("better-sqlite3");
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { TEMPLATES, SIGNATORIES } = require("./templates-catalog");
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "..", "data", "gdms.db");
+// Make sure the folder for the database exists (it may be empty and absent
+// after a fresh checkout, since git/uploads don't preserve empty folders).
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 
