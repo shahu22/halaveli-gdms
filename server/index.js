@@ -309,20 +309,19 @@ function rowToGuestInsert(g, dayId, listType) {
 }
 
 app.post("/api/import", auth, (req, res) => {
-  const { dayId, kind, text } = req.body || {};
+  const { dayId, text } = req.body || {};
   if (!dayId || !text) return res.status(400).json({ error: "dayId & text required" });
   const day = db.prepare("SELECT * FROM business_days WHERE id=?").get(dayId);
   if (!day) return res.status(404).json({ error: "Day not found" });
 
-  let parsed = [];
-  let listType = "arrival";
-  if (kind === "departure") { parsed = P.parseDepartures(text); listType = "departure"; }
-  else { parsed = P.parseArrivals(text); listType = "arrival"; }
+  // Arrivals only. Departures are now derived automatically from the
+  // departure date of in-house guests, so there's no departure import.
+  const parsed = P.parseArrivals(text);
+  const listType = "arrival";
 
   const insertMany = db.transaction((items) => {
     let n = 0;
     for (const g of items) {
-      // de-dupe by confirmation within the same day+listType
       const exists = db.prepare(
         "SELECT id FROM guests WHERE day_id=? AND list_type=? AND confirmation=?"
       ).get(dayId, listType, g.confirmation);
@@ -339,16 +338,47 @@ app.post("/api/import", auth, (req, res) => {
 // ============================================================================
 //  GUESTS
 // ============================================================================
+// Convert a stored display date (e.g. "18-Mar-2026") to a YYYY-MM-DD for compare
+function toISO(d) {
+  if (!d) return "";
+  const m = String(d).match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (!m) return "";
+  const months = { jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12" };
+  const mm = months[m[2].toLowerCase()]; if (!mm) return "";
+  return `${m[3]}-${mm}-${m[1].padStart(2,"0")}`;
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
 app.get("/api/guests", auth, (req, res) => {
   const { dayId, listType, q } = req.query;
+  const today = todayISO();
+
+  // Base query — we post-filter the in-house/departure/active split in JS using
+  // the departure date, so guests flow automatically without manual moves.
   let sql = "SELECT * FROM guests WHERE 1=1";
   const params = [];
-  if (dayId) { sql += " AND day_id=?"; params.push(dayId); }
-  if (listType) { sql += " AND list_type=?"; params.push(listType); }
+  if (dayId && listType === "arrival") { sql += " AND day_id=?"; params.push(dayId); }
   if (q) { sql += " AND (name LIKE ? OR villa LIKE ? OR confirmation LIKE ?)";
     params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
   sql += " ORDER BY CAST(villa AS INTEGER), villa";
-  const rows = db.prepare(sql).all(...params).map(hydrateGuest);
+  let rows = db.prepare(sql).all(...params).map(hydrateGuest);
+
+  rows = rows.filter((g) => {
+    const depISO = toISO(g.departure);
+    const departed = depISO && depISO < today;          // departure date already passed
+    if (listType === "arrival") {
+      return g.list_type === "arrival" && g.status !== "departed";
+    }
+    if (listType === "inhouse") {
+      // checked in, not yet at/after departure
+      return g.list_type === "inhouse" && g.status !== "departed" && (!depISO || depISO > today);
+    }
+    if (listType === "departure") {
+      // checked in and departing today
+      return g.list_type === "inhouse" && g.status !== "departed" && depISO && depISO === today;
+    }
+    return true;
+  });
   res.json(rows);
 });
 
@@ -360,12 +390,29 @@ app.get("/api/guests/:id", auth, (req, res) => {
 });
 
 app.put("/api/guests/:id", auth, (req, res) => {
-  const allowed = ["villa","villa_type","arrival","departure","meal_plan","nationality",
-    "confirmation","name","adults","children","hm","anniversary","repeater","repeater_count","remarks","list_type"];
+  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
+  if (!g) return res.status(404).json({ error: "Not found" });
+  const isAdmin = req.user.role === "admin";
+
+  // Locking: once a booking is in-house (checked in), normal staff cannot edit
+  // any fields. Admin can always edit.
+  if (g.list_type === "inhouse" && !isAdmin) {
+    return res.status(403).json({ error: "This booking is checked in and locked. Ask an admin to make changes." });
+  }
+
+  // Fields only an admin may change (dates, flights, villa moves).
+  const adminOnlyFields = ["arrival","departure","arrival_flight","departure_flight","villa","confirmation"];
+  const allowed = ["villa","villa_type","arrival","departure","arrival_flight","departure_flight",
+    "meal_plan","nationality","confirmation","name","adults","children","hm","anniversary",
+    "repeater","repeater_count","remarks","list_type"];
+
   const sets = [], vals = [];
   for (const k of allowed) {
-    if (k in req.body) { sets.push(`${k}=?`);
-      vals.push(typeof req.body[k] === "boolean" ? (req.body[k] ? 1 : 0) : req.body[k]); }
+    if (k in req.body) {
+      if (adminOnlyFields.includes(k) && !isAdmin) continue; // silently skip locked fields for staff
+      sets.push(`${k}=?`);
+      vals.push(typeof req.body[k] === "boolean" ? (req.body[k] ? 1 : 0) : req.body[k]);
+    }
   }
   if (req.body.guests) { sets.push("guests_json=?"); vals.push(JSON.stringify(req.body.guests)); }
   if (!sets.length) return res.json({ ok: true });
@@ -376,8 +423,11 @@ app.put("/api/guests/:id", auth, (req, res) => {
 
 // Recompute formatted name from edited guest objects
 app.post("/api/guests/:id/rebuild-name", auth, (req, res) => {
+  const g = db.prepare("SELECT list_type FROM guests WHERE id=?").get(req.params.id);
+  if (g && g.list_type === "inhouse" && req.user.role !== "admin")
+    return res.status(403).json({ error: "Locked — ask an admin." });
   const guests = req.body.guests || [];
-  const childCount = guests.filter((g) => g.role === "child").length;
+  const childCount = guests.filter((x) => x.role === "child").length;
   const name = P.buildName(guests, childCount);
   db.prepare("UPDATE guests SET name=?, guests_json=? WHERE id=?")
     .run(name, JSON.stringify(guests), req.params.id);
@@ -385,15 +435,46 @@ app.post("/api/guests/:id/rebuild-name", auth, (req, res) => {
 });
 
 app.delete("/api/guests/:id", auth, (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
   db.prepare("DELETE FROM documents WHERE guest_id=?").run(req.params.id);
   db.prepare("DELETE FROM guests WHERE id=?").run(req.params.id);
   res.json({ ok: true });
 });
 
-// Roll an arrival guest into the in-house list (kept accessible long-term)
-app.post("/api/guests/:id/to-inhouse", auth, (req, res) => {
-  db.prepare("UPDATE guests SET list_type='inhouse' WHERE id=?").run(req.params.id);
+// ---- Check in an arrival -> moves to in-house ----------------------------
+// Staff can check in only on the actual arrival date; admin can override.
+app.post("/api/guests/:id/checkin", auth, (req, res) => {
+  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
+  if (!g) return res.status(404).json({ error: "Not found" });
+  if (g.list_type === "inhouse") return res.json({ ok: true, already: true });
+
+  const isAdmin = req.user.role === "admin";
+  const arrISO = toISO(g.arrival);
+  if (!isAdmin && arrISO && arrISO !== todayISO()) {
+    return res.status(403).json({ error: `Check-in is only allowed on the arrival date (${g.arrival}).` });
+  }
+  db.prepare("UPDATE guests SET list_type='inhouse', checked_in_at=datetime('now') WHERE id=?").run(g.id);
   res.json({ ok: true });
+});
+
+// ---- Admin: create a booking from scratch --------------------------------
+app.post("/api/guests", auth, adminOnly, (req, res) => {
+  const b = req.body || {};
+  const dayId = b.day_id || (db.prepare("SELECT id FROM business_days ORDER BY the_date DESC LIMIT 1").get() || {}).id;
+  const guests = b.guests || [{ title: "Mr", last: "", first: "", role: "adult" }];
+  const name = b.name || P.buildName(guests, guests.filter((x) => x.role === "child").length);
+  const info = db.prepare(`INSERT INTO guests
+    (day_id,list_type,villa,villa_type,arrival,departure,arrival_flight,departure_flight,
+     meal_plan,nationality,confirmation,name,guests_json,adults,children,
+     hm,anniversary,repeater,repeater_count,special_requests,suggested_vouchers,remarks,status)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'active')`).run(
+    dayId, b.list_type || "arrival", b.villa || "", b.villa_type || "",
+    b.arrival || "", b.departure || "", b.arrival_flight || "", b.departure_flight || "",
+    b.meal_plan || "", b.nationality || "", b.confirmation || "", name,
+    JSON.stringify(guests), b.adults || 1, b.children || 0,
+    b.hm ? 1 : 0, b.anniversary ? 1 : 0, b.repeater ? 1 : 0, b.repeater_count || "",
+    "", JSON.stringify([]), b.remarks || "");
+  res.json({ id: info.lastInsertRowid });
 });
 
 function hydrateGuest(g) {
