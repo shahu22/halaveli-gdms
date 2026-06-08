@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Halaveli · Guest Document System</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Jost:wght@300;400;500;600&display=swap');
+  :root{
+    --sea:#0a5e63; --sea-deep:#063e42; --sea-light:#d4ebe9;
+    --sand:#f6f1e7; --sand-deep:#ece2cf; --ink:#23201b; --ink-soft:#6f675a;
+    --coral:#c45a3b; --coral-soft:#f6e0d6; --gold:#b58a36; --gold-soft:#f1e6c9;
+    --white:#fffdf9; --line:#dcd2bd;
+    --shadow:0 1px 2px rgba(20,30,30,.05),0 10px 30px rgba(20,30,30,.08);
+    --shadow-lg:0 20px 60px rgba(10,30,30,.25);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Jost',sans-serif;background:var(--sand);color:var(--ink);font-size:14px;
+    background-image:radial-gradient(circle at 90% -5%,rgba(10,94,99,.06),transparent 45%),radial-gradient(circle at 0% 100%,rgba(196,90,59,.05),transparent 40%);min-height:100vh}
+  h1,h2,h3{font-family:'Cormorant Garamond',serif;font-weight:600}
+  button{font-family:'Jost',sans-serif;cursor:pointer;border:none}
+  input,select,textarea{font-family:'Jost',sans-serif;font-size:14px}
+  .hidden{display:none!important}
+
+  /* LOGIN */
+  #login{min-height:100vh;display:grid;place-items:center;padding:20px}
+  .login-card{background:var(--white);border-radius:22px;box-shadow:var(--shadow-lg);padding:48px 44px;width:100%;max-width:400px;text-align:center;border-top:4px solid var(--sea)}
+  .login-card .crest{width:54px;height:54px;border:1.5px solid var(--sea);border-radius:50%;display:grid;place-items:center;margin:0 auto 18px;font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--sea)}
+  .login-card h1{font-size:30px;color:var(--sea-deep)}
+  .login-card .sub{color:var(--ink-soft);font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 28px}
+  .field{margin-bottom:16px;text-align:left}
+  .field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-bottom:6px;font-weight:500}
+  .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--sand);color:var(--ink)}
+  .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--sea);background:var(--white)}
+  .err{color:var(--coral);font-size:12px;margin-top:10px;min-height:16px}
+
+  .btn{border-radius:10px;padding:11px 20px;font-weight:500;font-size:13px;display:inline-flex;align-items:center;gap:7px;justify-content:center;transition:transform .1s,box-shadow .15s,background .15s}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--sea);color:#fff;width:100%}
+  .btn-primary:hover{background:var(--sea-deep)}
+  .btn-coral{background:var(--coral);color:#fff}
+  .btn-gold{background:var(--gold);color:#fff}
+  .btn-ghost{background:var(--white);color:var(--ink);border:1px solid var(--line)}
+  .btn-ghost:hover{border-color:var(--sea);color:var(--sea)}
+  .btn-sm{padding:7px 13px;font-size:12px;border-radius:8px}
+
+  /* APP SHELL */
+  #app{display:none;min-height:100vh;flex-direction:column}
+  .topbar{background:var(--sea-deep);color:#fff;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;box-shadow:var(--shadow);position:sticky;top:0;z-index:40;flex-wrap:wrap}
+  .topbar .brand{display:flex;align-items:center;gap:12px}
+  .topbar .crest{width:34px;height:34px;border:1.5px solid rgba(255,255,255,.55);border-radius:50%;display:grid;place-items:center;font-family:'Cormorant Garamond',serif;font-size:18px}
+  .topbar h2{font-size:20px;font-weight:500;line-height:1}
+  .topbar .tag{font-size:10px;letter-spacing:1.5px;opacity:.65;text-transform:uppercase}
+  .nav{display:flex;gap:4px;align-items:center}
+  .nav button{background:transparent;color:rgba(255,255,255,.8);padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500}
+  .nav button.active{background:rgba(255,255,255,.15);color:#fff}
+  .nav button:hover{color:#fff}
+  .user-chip{display:flex;align-items:center;gap:10px;font-size:13px}
+  .user-chip .who{opacity:.85}
+
+  .wrap{max-width:1500px;margin:0 auto;padding:22px 24px 80px;width:100%}
+
+  /* DAY BAR */
+  .daybar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--white);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow);margin-bottom:20px}
+  .daybar select{min-width:180px}
+  .daybar .spacer{flex:1}
+  .pill{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.5px}
+  .pill.open{background:var(--sea-light);color:var(--sea-deep)}
+  .pill.closed{background:var(--sand-deep);color:var(--ink-soft)}
+
+  /* STATS */
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  .stat{background:var(--white);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow);flex:1;min-width:120px;border-left:3px solid var(--sea)}
+  .stat .n{font-family:'Cormorant Garamond',serif;font-size:30px;font-weight:600;line-height:1}
+  .stat .l{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-top:4px}
+  .stat.coral{border-left-color:var(--coral)} .stat.gold{border-left-color:var(--gold)}
+
+  /* TOOLBAR */
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .search{flex:1;min-width:200px;background:var(--white);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+  .search:focus{outline:none;border-color:var(--sea)}
+  .seg{display:flex;background:var(--white);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{padding:9px 15px;font-size:12px;font-weight:500;color:var(--ink-soft);background:transparent}
+  .seg button.on{background:var(--sea);color:#fff}
+
+  /* TABLE */
+  .card{background:var(--white);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+  .scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;min-width:980px}
+  thead th{background:var(--sea-deep);color:#fff;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.7px;padding:12px 10px;text-align:left;white-space:nowrap}
+  tbody tr{border-bottom:1px solid var(--sand-deep)}
+  tbody tr:hover{background:var(--sand)}
+  tbody td{padding:9px 10px;font-size:13px;vertical-align:middle}
+  .name-cell{font-weight:500;min-width:230px}
+  .conf-cell{font-variant-numeric:tabular-nums;color:var(--sea-deep);font-weight:500}
+  .flagwrap{display:flex;gap:4px}
+  .flag{width:25px;height:25px;border-radius:7px;display:grid;place-items:center;font-size:12px;border:1px solid var(--line);background:var(--sand);cursor:pointer;user-select:none}
+  .flag.on.hm{background:var(--coral);border-color:var(--coral);color:#fff}
+  .flag.on.an{background:var(--gold);border-color:var(--gold);color:#fff}
+  .flag.on.rp{background:var(--sea);border-color:var(--sea);color:#fff}
+  .badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600}
+  .badge.aip{background:var(--sea-light);color:var(--sea-deep)}
+  .badge.hb{background:var(--gold-soft);color:var(--gold)}
+  .badge.fb{background:var(--coral-soft);color:var(--coral)}
+  .badge.bb,.badge.none{background:var(--sand-deep);color:var(--ink-soft)}
+  .doc-count{font-size:11px;background:var(--sea-light);color:var(--sea-deep);border-radius:20px;padding:2px 9px;font-weight:600}
+  .linkbtn{background:none;color:var(--sea);font-weight:500;font-size:12px;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
+  .linkbtn:hover{border-color:var(--sea);background:var(--sea-light)}
+  .empty{text-align:center;padding:50px;color:var(--ink-soft)}
+
+  /* PANEL */
+  .overlay{position:fixed;inset:0;background:rgba(15,25,25,.4);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .25s;z-index:90}
+  .overlay.open{opacity:1;pointer-events:auto}
+  .panel{position:fixed;top:0;right:0;height:100%;width:540px;max-width:96vw;background:var(--sand);box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:91;display:flex;flex-direction:column}
+  .panel.open{transform:translateX(0)}
+  .panel-head{background:var(--sea-deep);color:#fff;padding:20px 24px;position:relative}
+  .panel-head .villa{font-family:'Cormorant Garamond',serif;font-size:24px}
+  .panel-head .sub{font-size:12px;opacity:.8;margin-top:2px}
+  .panel-head .x{position:absolute;top:16px;right:18px;background:rgba(255,255,255,.15);width:30px;height:30px;border-radius:8px;color:#fff;font-size:16px}
+  .panel-body{padding:22px 24px;overflow-y:auto;flex:1}
+  .section-title{font-family:'Cormorant Garamond',serif;font-size:19px;color:var(--sea-deep);margin:22px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .section-title:first-child{margin-top:0}
+
+  .toggle-row{display:flex;gap:8px;margin-bottom:8px}
+  .toggle{flex:1;border:1.5px solid var(--line);border-radius:11px;padding:11px;text-align:center;cursor:pointer;background:var(--white)}
+  .toggle .ti{font-size:18px}
+  .toggle .tl{font-size:10px;font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  .toggle.on.hm{background:var(--coral-soft);border-color:var(--coral)}
+  .toggle.on.an{background:var(--gold-soft);border-color:var(--gold)}
+  .toggle.on.rp{background:var(--sea-light);border-color:var(--sea)}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .nameedit{background:var(--white);border-radius:11px;padding:12px;margin-top:8px}
+  .nameedit .grp{display:flex;gap:6px;align-items:center;margin-bottom:7px}
+  .nameedit select{border:1px solid var(--line);border-radius:7px;padding:6px}
+  .nameedit input{flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;min-width:50px}
+  .nameedit .tag{font-size:9px;font-weight:700;color:var(--ink-soft);width:34px;text-transform:uppercase}
+  .preview{background:var(--sea-light);border-radius:9px;padding:10px 12px;font-weight:500;color:var(--sea-deep);margin-top:6px}
+  .rm{background:none;color:var(--line);font-size:15px;padding:2px 5px}.rm:hover{color:var(--coral)}
+
+  /* voucher chooser */
+  .vcat{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin:14px 0 6px;font-weight:600}
+  .vgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .vopt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--white);cursor:pointer;font-size:12.5px;display:flex;align-items:center;gap:8px}
+  .vopt:hover{border-color:var(--sea)}
+  .vopt .chk{width:16px;height:16px;border:1.5px solid var(--line);border-radius:5px;flex:none;display:grid;place-items:center;font-size:11px;color:#fff}
+  .vopt.sel{border-color:var(--sea);background:var(--sea-light)}
+  .vopt.sel .chk{background:var(--sea);border-color:var(--sea)}
+  .vopt .sug{font-size:9px;background:var(--gold-soft);color:var(--gold);border-radius:8px;padding:1px 6px;margin-left:auto;font-weight:700}
+
+  /* doc list */
+  .doc{background:var(--white);border-radius:11px;padding:13px 15px;margin-bottom:10px;border:1px solid var(--line)}
+  .doc .dh{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+  .doc .dt{font-weight:500}
+  .doc .dstat{font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .doc .dstat.draft{background:var(--sand-deep);color:var(--ink-soft)}
+  .doc .dstat.exported{background:var(--sea-light);color:var(--sea-deep)}
+  .doc .drow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .doc textarea,.doc input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px}
+  .mini-label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);margin-top:8px;display:block}
+
+  /* admin / modals */
+  .modal-overlay{position:fixed;inset:0;background:rgba(15,25,25,.45);display:none;place-items:center;z-index:100;padding:20px}
+  .modal-overlay.open{display:grid}
+  .modal{background:var(--white);border-radius:18px;box-shadow:var(--shadow-lg);width:100%;max-width:460px;padding:28px}
+  .modal h3{font-size:24px;color:var(--sea-deep);margin-bottom:18px}
+  .modal .row{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+  .userrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--sand-deep)}
+  .userrow .ur-role{font-size:10px;text-transform:uppercase;letter-spacing:.5px;background:var(--sea-light);color:var(--sea-deep);padding:2px 8px;border-radius:10px;margin-left:8px}
+
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--ink);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;box-shadow:var(--shadow-lg);opacity:0;transition:all .3s;z-index:200}
+  .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+
+  .importbox{border:2px dashed var(--line);border-radius:14px;padding:18px;text-align:center;background:var(--white);margin-bottom:14px}
+  .importbox textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0;font-family:ui-monospace,monospace;font-size:11px}
+
+  /* TEMPLATE LIST */
+  .tpl-row{display:flex;align-items:center;gap:12px;padding:13px 20px;border-bottom:1px solid var(--sand-deep)}
+  .tpl-row:last-child{border-bottom:none}
+  .tpl-row:hover{background:var(--sand)}
+  .tpl-row.archived{opacity:.5}
+  .tpl-cat{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--sea-deep);background:var(--sea-light);padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap}
+  .tpl-name{font-weight:500;flex:1}
+  .tpl-meta{font-size:11px;color:var(--ink-soft)}
+  .tpl-actions{display:flex;gap:6px}
+  .tpl-cat-head{font-family:'Cormorant Garamond',serif;font-size:18px;color:var(--sea-deep);padding:14px 20px 6px;font-weight:600}
+
+  /* TEMPLATE EDITOR */
+  .tpl-editor{position:fixed;inset:0;background:var(--sand);z-index:120;display:none;flex-direction:column}
+  .tpl-editor.open{display:flex}
+  .tpl-editor-head{background:var(--sea-deep);color:#fff;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;font-family:'Cormorant Garamond',serif;font-size:22px}
+  .tpl-editor-body{flex:1;display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
+  .tpl-form{overflow-y:auto;padding:24px 28px;border-right:1px solid var(--line)}
+  .tpl-preview-pane{overflow-y:auto;padding:24px 28px;background:var(--sand-deep)}
+  .tpl-preview-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-bottom:12px;font-weight:600}
+  .tpl-paper{background:#fff;border-radius:6px;box-shadow:var(--shadow);padding:54px 60px;min-height:70vh;font-family:Calibri,sans-serif;text-align:center;font-size:13px;line-height:1.7;color:#222}
+  .tpl-paper .pl{margin-bottom:14px;white-space:pre-wrap}
+  .tpl-paper .pl.b{font-weight:700}.tpl-paper .pl.i{font-style:italic;font-size:12px}
+  .tpl-paper .pl.bullet{text-align:left;margin-bottom:5px}
+  .tpl-paper .pl.conf{text-align:right;color:#666;font-size:11px;margin-top:30px}
+  .tpl-field{margin-bottom:15px}
+  .tpl-field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink-soft);margin-bottom:5px;font-weight:600}
+  .tpl-field input,.tpl-field select,.tpl-field textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#fff;font-size:13px}
+  .tpl-field textarea{resize:vertical;line-height:1.5}
+  .tpl-field .hint{font-size:11px;color:var(--ink-soft);margin-top:4px}
+  .tpl-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .body-line{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
+  .body-line textarea{flex:1;min-height:38px}
+  .body-line .lt{display:flex;flex-direction:column;gap:3px}
+  .body-line select{font-size:11px;padding:4px}
+  .chipbtn{font-size:11px;background:var(--sea-light);color:var(--sea-deep);border-radius:7px;padding:5px 9px;font-weight:500}
+  .chipbtn:hover{background:var(--sea);color:#fff}
+  .insert-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  @media(max-width:900px){.tpl-editor-body{grid-template-columns:1fr}.tpl-preview-pane{display:none}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <div class="login-card">
+    <div class="crest">H</div>
+    <h1>Halaveli</h1>
+    <div class="sub">Guest Document System</div>
+    <div class="field"><label>Username</label><input id="lUser" autocomplete="username"></div>
+    <div class="field"><label>Password</label><input id="lPass" type="password" autocomplete="current-password"></div>
+    <button class="btn btn-primary" id="loginBtn">Sign In</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <div class="brand">
+      <div class="crest">H</div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System</div></div>
+    </div>
+    <div class="nav" id="nav">
+      <button data-view="guests" class="active">Guest Lists</button>
+      <button data-view="documents">Documents</button>
+      <button data-view="templates" id="navTemplates">Templates</button>
+      <button data-view="admin" id="navAdmin">Admin</button>
+    </div>
+    <div class="user-chip">
+      <span class="who" id="whoami"></span>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Sign out</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- GUESTS VIEW -->
+    <div id="view-guests">
+      <div class="daybar">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft)">Business Day</label>
+        <select id="daySelect"></select>
+        <span class="pill open" id="dayStatus">open</span>
+        <button class="btn btn-ghost btn-sm" id="newDayBtn">+ New Day</button>
+        <button class="btn btn-ghost btn-sm" id="importBtn">⬆ Import Opera Export</button>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost btn-sm" id="closeDayBtn">Close &amp; Roll to Next Day</button>
+      </div>
+
+      <div class="importbox hidden" id="importBox">
+        <strong>Paste tab-delimited Opera export</strong> (Arrival res_detail or Departure report)
+        <textarea id="importText" placeholder="Paste the full exported text here…"></textarea>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <div class="seg"><button id="impArr" class="on">Arrivals</button><button id="impDep">Departures</button></div>
+          <button class="btn btn-primary btn-sm" style="width:auto" id="doImport">Import</button>
+          <button class="btn btn-ghost btn-sm" id="cancelImport">Cancel</button>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="toolbar">
+        <input class="search" id="search" placeholder="Search name, villa, confirmation…">
+        <div class="seg" id="listSeg">
+          <button data-lt="arrival" class="on">Arrivals</button>
+          <button data-lt="inhouse">In-House</button>
+          <button data-lt="departure">Departures</button>
+        </div>
+      </div>
+
+      <div class="card"><div class="scroll"><table>
+        <thead><tr>
+          <th>Flags</th><th>Villa</th><th>Nat.</th><th>Departure</th><th>MP</th>
+          <th>Name</th><th>Confirmation</th><th>Docs</th><th></th>
+        </tr></thead>
+        <tbody id="gbody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- TEMPLATES VIEW (Template Builder) -->
+    <div id="view-templates" class="hidden">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+        <h2 style="font-size:26px;color:var(--sea-deep)">Document Templates</h2>
+        <span class="pill open" id="tplLangPill">English</span>
+        <div class="spacer" style="flex:1"></div>
+        <button class="btn btn-ghost btn-sm" id="manageSignatoriesBtn">Signatories</button>
+        <button class="btn btn-primary btn-sm" style="width:auto" id="newTplBtn">+ New Template</button>
+      </div>
+      <p style="color:var(--ink-soft);font-size:12.5px;margin:-6px 0 16px;max-width:680px;line-height:1.6">
+        Create and edit the documents your team can generate — vouchers, disclaimers, upgrade letters, anything.
+        Use <code>{{name}}</code>, <code>{{date}}</code>, <code>{{confirmation}}</code> and <code>{{villa}}</code>
+        where you want guest details filled in automatically.
+      </p>
+      <div class="card" style="padding:8px 0"><div id="tplList"></div></div>
+    </div>
+
+    <!-- DOCUMENTS VIEW -->
+    <div id="view-documents" class="hidden">
+      <h2 style="font-size:26px;color:var(--sea-deep);margin-bottom:14px">All Generated Documents</h2>
+      <div class="card"><div class="scroll"><table>
+        <thead><tr><th>Document</th><th>Guest</th><th>Villa</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="dbody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="view-admin" class="hidden">
+      <h2 style="font-size:26px;color:var(--sea-deep);margin-bottom:14px">Staff Accounts</h2>
+      <div class="card" style="padding:18px 22px">
+        <div id="userList"></div>
+        <button class="btn btn-primary btn-sm" style="width:auto;margin-top:14px" id="addUserBtn">+ Add Staff Account</button>
+      </div>
+      <p style="color:var(--ink-soft);font-size:12px;margin-top:14px;max-width:560px;line-height:1.6">
+        Only administrators can create accounts and set passwords. Grant “Manage templates” to let trusted staff
+        create and edit document templates without full admin access.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- TEMPLATE EDITOR (full overlay) -->
+<div class="tpl-editor" id="tplEditor">
+  <div class="tpl-editor-head">
+    <div><span id="tplEditTitle">Edit Template</span></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" id="tplCancel">Close</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="tplSave">Save Template</button>
+    </div>
+  </div>
+  <div class="tpl-editor-body">
+    <div class="tpl-form" id="tplForm"></div>
+    <div class="tpl-preview-pane">
+      <div class="tpl-preview-label">Live Preview</div>
+      <div class="tpl-paper" id="tplPaper"></div>
+    </div>
+  </div>
+</div>
+
+<!-- GUEST PANEL -->
+<div class="overlay" id="overlay"></div>
+<div class="panel" id="panel">
+  <div class="panel-head"><button class="x" id="panelClose">✕</button>
+    <div class="villa" id="pVilla">Villa</div><div class="sub" id="pSub"></div></div>
+  <div class="panel-body" id="panelBody"></div>
+</div>
+
+<!-- MODALS -->
+<div class="modal-overlay" id="modal"><div class="modal" id="modalInner"></div></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const api = {
+  async req(method, url, body){
+    const opt={method,headers:{}};
+    if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
+    const r=await fetch(url,opt);
+    if(r.status===401){showLogin();throw new Error('unauth');}
+    const ct=r.headers.get('content-type')||'';
+    if(ct.includes('application/json')){const d=await r.json();if(!r.ok)throw new Error(d.error||'error');return d;}
+    if(!r.ok)throw new Error('error');return r;
+  },
+  get:(u)=>api.req('GET',u), post:(u,b)=>api.req('POST',u,b),
+  put:(u,b)=>api.req('PUT',u,b), del:(u)=>api.req('DELETE',u),
+};
+
+let state={user:null,days:[],dayId:null,listType:'arrival',guests:[],templates:[],signatories:{},search:''};
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ---------- AUTH ---------- */
+function showLogin(){document.getElementById('login').style.display='grid';document.getElementById('app').style.display='none';}
+function showApp(){document.getElementById('login').style.display='none';document.getElementById('app').style.display='flex';}
+
+document.getElementById('loginBtn').onclick=async()=>{
+  const username=document.getElementById('lUser').value, password=document.getElementById('lPass').value;
+  try{const d=await api.post('/api/login',{username,password});state.user=d.user;await boot();}
+  catch(e){document.getElementById('loginErr').textContent='Invalid username or password';}
+};
+document.getElementById('lPass').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('loginBtn').click();});
+document.getElementById('logoutBtn').onclick=async()=>{await api.post('/api/logout');state.user=null;showLogin();};
+
+/* ---------- BOOT ---------- */
+async function boot(){
+  showApp();
+  document.getElementById('whoami').textContent=state.user.display_name||state.user.username;
+  document.getElementById('navAdmin').style.display=state.user.role==='admin'?'':'none';
+  const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
+  state.canManage=!!t.canManage;
+  document.getElementById('navTemplates').style.display=state.canManage?'':'none';
+  await loadDays();
+}
+
+/* ---------- DAYS ---------- */
+async function loadDays(){
+  state.days=await api.get('/api/days');
+  const sel=document.getElementById('daySelect');
+  if(!state.days.length){
+    // auto-create today
+    const today=new Date().toISOString().slice(0,10);
+    const d=await api.post('/api/days',{date:today});state.days=[d];
+  }
+  sel.innerHTML=state.days.map(d=>`<option value="${d.id}">${d.the_date}</option>`).join('');
+  state.dayId=state.days[0].id;sel.value=state.dayId;
+  updateDayStatus();
+  await loadGuests();
+}
+function updateDayStatus(){
+  const d=state.days.find(x=>x.id==state.dayId);if(!d)return;
+  const el=document.getElementById('dayStatus');el.textContent=d.status;el.className='pill '+(d.status==='open'?'open':'closed');
+}
+document.getElementById('daySelect').onchange=async(e)=>{state.dayId=+e.target.value;updateDayStatus();await loadGuests();};
+document.getElementById('newDayBtn').onclick=()=>openModal(`
+  <h3>New Business Day</h3>
+  <div class="field"><label>Date</label><input id="ndDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="ndSave">Create</button></div>`,()=>{
+    document.getElementById('ndSave').onclick=async()=>{
+      const date=document.getElementById('ndDate').value;
+      const d=await api.post('/api/days',{date});closeModal();await loadDays();
+      state.dayId=d.id;document.getElementById('daySelect').value=d.id;updateDayStatus();await loadGuests();toast('Day created');
+    };
+  });
+document.getElementById('closeDayBtn').onclick=async()=>{
+  if(!confirm('Close this day and create the next one? Current guests remain accessible in In-House.'))return;
+  await api.post('/api/days/'+state.dayId+'/close');
+  // move arrivals to in-house
+  for(const g of state.guests.filter(x=>x.list_type==='arrival')){await api.post('/api/guests/'+g.id+'/to-inhouse');}
+  const next=new Date();next.setDate(next.getDate()+1);
+  const d=await api.post('/api/days',{date:next.toISOString().slice(0,10)});
+  await loadDays();state.dayId=d.id;document.getElementById('daySelect').value=d.id;updateDayStatus();await loadGuests();
+  toast('Rolled to next day');
+};
+
+/* ---------- IMPORT ---------- */
+let importKind='arrival';
+document.getElementById('importBtn').onclick=()=>document.getElementById('importBox').classList.toggle('hidden');
+document.getElementById('cancelImport').onclick=()=>document.getElementById('importBox').classList.add('hidden');
+document.getElementById('impArr').onclick=()=>{importKind='arrival';document.getElementById('impArr').classList.add('on');document.getElementById('impDep').classList.remove('on');};
+document.getElementById('impDep').onclick=()=>{importKind='departure';document.getElementById('impDep').classList.add('on');document.getElementById('impArr').classList.remove('on');};
+document.getElementById('doImport').onclick=async()=>{
+  const text=document.getElementById('importText').value.trim();
+  if(!text)return toast('Paste the export first');
+  const r=await api.post('/api/import',{dayId:state.dayId,kind:importKind,text});
+  document.getElementById('importBox').classList.add('hidden');document.getElementById('importText').value='';
+  toast(`Imported ${r.added} of ${r.parsed} ${r.listType} guests`);
+  state.listType=r.listType;syncListSeg();await loadGuests();
+};
+
+/* ---------- GUEST LIST ---------- */
+function syncListSeg(){document.querySelectorAll('#listSeg button').forEach(b=>b.classList.toggle('on',b.dataset.lt===state.listType));}
+document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();await loadGuests();});
+document.getElementById('search').oninput=(e)=>{state.search=e.target.value;renderGuests();};
+
+async function loadGuests(){
+  state.guests=await api.get(`/api/guests?dayId=${state.dayId}&listType=${state.listType}`);
+  renderGuests();
+}
+function mpClass(mp){const m=(mp||'').toLowerCase();return m.includes('aip')?'aip':m.includes('fb')?'fb':m.includes('hb')?'hb':m.includes('bb')?'bb':'none';}
+
+function renderGuests(){
+  const q=state.search.toLowerCase();
+  const rows=state.guests.filter(g=>!q||(g.name+g.villa+g.confirmation).toLowerCase().includes(q));
+  document.getElementById('stats').innerHTML=`
+    <div class="stat"><div class="n">${state.guests.length}</div><div class="l">${state.listType}</div></div>
+    <div class="stat coral"><div class="n">${state.guests.filter(g=>g.hm).length}</div><div class="l">Honeymoon</div></div>
+    <div class="stat gold"><div class="n">${state.guests.filter(g=>g.anniversary).length}</div><div class="l">Anniversary</div></div>
+    <div class="stat"><div class="n">${state.guests.filter(g=>g.repeater).length}</div><div class="l">Repeater</div></div>`;
+  const tb=document.getElementById('gbody');
+  tb.innerHTML=rows.length?rows.map(g=>`
+    <tr data-id="${g.id}">
+      <td><div class="flagwrap">
+        <span class="flag hm ${g.hm?'on':''}" data-f="hm" title="Honeymoon">♡</span>
+        <span class="flag an ${g.anniversary?'on':''}" data-f="anniversary" title="Anniversary">⚭</span>
+        <span class="flag rp ${g.repeater?'on':''}" data-f="repeater" title="Repeater">★</span>
+      </div></td>
+      <td><strong>${esc(g.villa)}</strong><div style="font-size:10px;color:var(--ink-soft)">${esc(g.villa_type||'')}</div></td>
+      <td>${esc(g.nationality||'—')}</td>
+      <td>${esc(g.departure||'')}</td>
+      <td><span class="badge ${mpClass(g.meal_plan)}">${esc(g.meal_plan||'—')}</span></td>
+      <td class="name-cell">${esc(g.name)}</td>
+      <td class="conf-cell">${esc(g.confirmation)}</td>
+      <td><span class="doc-count" data-id="${g.id}">·</span></td>
+      <td><button class="linkbtn" data-open="${g.id}">Open</button></td>
+    </tr>`).join('') : `<tr><td colspan="9"><div class="empty">No ${state.listType} guests yet. Use “Import Opera Export”.</div></td></tr>`;
+  tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
+    const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
+    const field=f.dataset.f;g[field]=!g[field];await api.put('/api/guests/'+id,{[field]:g[field]});renderGuests();
+  });
+  tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
+  // load doc counts
+  rows.forEach(async g=>{
+    try{const d=await api.get('/api/guests/'+g.id);const c=d.documents.length;
+      const el=document.querySelector(`.doc-count[data-id="${g.id}"]`);if(el)el.textContent=c?c:'·';}catch{}
+  });
+}
+
+/* ---------- GUEST PANEL ---------- */
+let panelGuest=null,panelDocs=[];
+async function openGuest(id){
+  const d=await api.get('/api/guests/'+id);panelGuest=d.guest;panelDocs=d.documents;
+  document.getElementById('pVilla').textContent='Villa '+(panelGuest.villa||'—');
+  document.getElementById('pSub').textContent=`${panelGuest.confirmation} · ${panelGuest.meal_plan||''} · ${panelGuest.list_type}`;
+  renderPanel();
+  document.getElementById('overlay').classList.add('open');document.getElementById('panel').classList.add('open');
+}
+function closePanel(){document.getElementById('overlay').classList.remove('open');document.getElementById('panel').classList.remove('open');loadGuests();}
+document.getElementById('panelClose').onclick=closePanel;document.getElementById('overlay').onclick=closePanel;
+
+function renderPanel(){
+  const g=panelGuest;
+  const body=document.getElementById('panelBody');
+  const byCat={};state.templates.forEach(t=>{(byCat[t.category]=byCat[t.category]||[]).push(t);});
+  const selectedIds=new Set(panelDocs.map(d=>d.template_id));
+  body.innerHTML=`
+    <div class="toggle-row">
+      <div class="toggle hm ${g.hm?'on':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
+      <div class="toggle an ${g.anniversary?'on':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
+      <div class="toggle rp ${g.repeater?'on':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
+    </div>
+
+    <div class="section-title">Guest Details</div>
+    <div class="grid2">
+      <div class="field"><label>Villa</label><input id="f_villa" value="${esc(g.villa)}"></div>
+      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry"></div>
+      <div class="field"><label>Departure</label><input id="f_departure" value="${esc(g.departure||'')}"></div>
+      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}"></div>
+      <div class="field"><label>Confirmation</label><input id="f_confirmation" value="${esc(g.confirmation)}"></div>
+      <div class="field"><label>List</label>
+        <select id="f_list_type">
+          <option value="arrival" ${g.list_type==='arrival'?'selected':''}>Arrival</option>
+          <option value="inhouse" ${g.list_type==='inhouse'?'selected':''}>In-House</option>
+          <option value="departure" ${g.list_type==='departure'?'selected':''}>Departure</option>
+        </select></div>
+    </div>
+
+    <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
+    <div class="preview" id="namePrev">${esc(g.name)}</div>
+    <div class="nameedit" id="nameEdit"></div>
+    <input id="f_name" type="hidden" value="${esc(g.name)}">
+    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
+
+    <div class="section-title">Vouchers &amp; Documents</div>
+    ${Object.keys(byCat).map(cat=>`
+      <div class="vcat">${cat}</div>
+      <div class="vgrid">
+        ${byCat[cat].map(t=>{
+          const sug=g.suggested_vouchers.includes(t.id);
+          const sel=selectedIds.has(t.id);
+          return `<div class="vopt ${sel?'sel':''}" data-tpl="${t.id}">
+            <span class="chk">${sel?'✓':''}</span>${esc(t.label)}
+            ${sug?'<span class="sug">suggested</span>':''}</div>`;
+        }).join('')}
+      </div>`).join('')}
+
+    <div class="section-title">Created Documents</div>
+    <div id="docList"></div>
+  `;
+
+  body.querySelectorAll('.toggle').forEach(t=>t.onclick=async()=>{
+    const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');await api.put('/api/guests/'+g.id,{[f]:g[f]});
+  });
+  buildNameEditor();
+  document.getElementById('saveDetails').onclick=saveDetails;
+  body.querySelectorAll('.vopt').forEach(v=>v.onclick=()=>toggleVoucher(v.dataset.tpl,v));
+  renderDocList();
+}
+
+function buildNameEditor(){
+  const g=panelGuest;const box=document.getElementById('nameEdit');
+  let guests=g.guests&&g.guests.length?g.guests:[{title:'Mr',last:'',first:'',role:'adult'}];
+  g.guests=guests;
+  box.innerHTML=guests.map((gu,i)=>`
+    <div class="grp">
+      <span class="tag">${gu.role==='child'?'Child':'Adult'}</span>
+      <select data-i="${i}" data-k="title">${['Mrs','Mr','Ms','Miss','Master','Dr'].map(t=>`<option ${gu.title===t?'selected':''}>${t}</option>`).join('')}</select>
+      <input data-i="${i}" data-k="last" value="${esc(gu.last)}" placeholder="Last">
+      <input data-i="${i}" data-k="first" value="${esc(gu.first)}" placeholder="First">
+      <button class="rm" data-rm="${i}">✕</button>
+    </div>`).join('')+`
+    <div style="display:flex;gap:6px;margin-top:4px">
+      <button class="btn btn-ghost btn-sm" id="addA" style="flex:1">+ Adult</button>
+      <button class="btn btn-ghost btn-sm" id="addC" style="flex:1">+ Child</button>
+    </div>`;
+  box.querySelectorAll('input,select').forEach(el=>el.oninput=async()=>{
+    const gu=guests[+el.dataset.i];gu[el.dataset.k]=el.value;
+    if(el.dataset.k==='title')gu.role=el.value==='Master'?'child':gu.role;
+    const r=await api.post('/api/guests/'+g.id+'/rebuild-name',{guests});
+    document.getElementById('namePrev').textContent=r.name;document.getElementById('f_name').value=r.name;g.name=r.name;
+  });
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{
+    guests.splice(+b.dataset.rm,1);const r=await api.post('/api/guests/'+g.id+'/rebuild-name',{guests});
+    g.name=r.name;buildNameEditor();document.getElementById('namePrev').textContent=r.name;document.getElementById('f_name').value=r.name;
+  });
+  document.getElementById('addA').onclick=()=>{guests.push({title:'Mr',last:'',first:'',role:'adult'});buildNameEditor();};
+  document.getElementById('addC').onclick=()=>{guests.push({title:'Master',last:'',first:'',role:'child'});buildNameEditor();};
+}
+
+async function saveDetails(){
+  const g=panelGuest;
+  const patch={};['villa','nationality','departure','meal_plan','confirmation','name','list_type'].forEach(k=>{
+    patch[k]=document.getElementById('f_'+k).value;});
+  await api.put('/api/guests/'+g.id,patch);Object.assign(g,patch);toast('Saved');
+  document.getElementById('pSub').textContent=`${g.confirmation} · ${g.meal_plan||''} · ${g.list_type}`;
+}
+
+async function toggleVoucher(tplId,el){
+  const g=panelGuest;
+  const existing=panelDocs.find(d=>d.template_id===tplId);
+  if(existing){await api.del('/api/documents/'+existing.id);panelDocs=panelDocs.filter(d=>d.id!==existing.id);el.classList.remove('sel');el.querySelector('.chk').textContent='';}
+  else{const tpl=state.templates.find(t=>t.id===tplId);
+    const r=await api.post('/api/documents',{guest_id:g.id,template_id:tplId,signatory:tpl.signatory});
+    const d=await api.get('/api/guests/'+g.id);panelDocs=d.documents;el.classList.add('sel');el.querySelector('.chk').textContent='✓';}
+  renderDocList();
+}
+
+function renderDocList(){
+  const wrap=document.getElementById('docList');
+  if(!panelDocs.length){wrap.innerHTML='<p style="color:var(--ink-soft);font-size:12px">No documents yet — select vouchers above.</p>';return;}
+  wrap.innerHTML=panelDocs.map(d=>{
+    const tpl=state.templates.find(t=>t.id===d.template_id)||{label:d.template_id};
+    const f=d.fields||{};
+    return `<div class="doc" data-doc="${d.id}">
+      <div class="dh"><span class="dt">${esc(tpl.label)}</span>
+        <span class="dstat ${d.status}">${d.status}</span></div>
+      <label class="mini-label">Name on voucher</label>
+      <input data-k="name" value="${esc(f.name||'')}">
+      ${tpl.hasDate?`<label class="mini-label">${esc(tpl.dateLabel||'Date')}</label><input data-k="date" value="${esc(f.date||'')}" placeholder="e.g. 27th May 2026 at 19:00 – 20:30">`:''}
+      <label class="mini-label">Signatory</label>
+      <select data-k="signatory">${Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${(d.signatory===k)?'selected':''}>${v.name} — ${v.title}</option>`).join('')}</select>
+      <div class="drow">
+        <button class="btn btn-ghost btn-sm" data-save="${d.id}">Save</button>
+        <button class="btn btn-gold btn-sm" data-exp="${d.id}" data-fmt="docx">⬇ Word</button>
+        <button class="btn btn-coral btn-sm" data-exp="${d.id}" data-fmt="pdf">⬇ PDF</button>
+        <button class="btn btn-ghost btn-sm" data-del="${d.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-save]').forEach(b=>b.onclick=async()=>{
+    const card=b.closest('.doc');const id=b.dataset.save;
+    const fields={};card.querySelectorAll('[data-k]').forEach(el=>{if(el.dataset.k!=='signatory')fields[el.dataset.k]=el.value;});
+    const signatory=card.querySelector('[data-k="signatory"]').value;
+    fields.confirmation=panelGuest.confirmation;
+    await api.put('/api/documents/'+id,{fields,signatory});toast('Saved');
+    const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();
+  });
+  wrap.querySelectorAll('[data-exp]').forEach(b=>b.onclick=()=>{
+    window.open('/api/documents/'+b.dataset.exp+'/export?format='+b.dataset.fmt,'_blank');
+  });
+  wrap.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    await api.del('/api/documents/'+b.dataset.del);
+    const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();renderPanel();
+  });
+}
+
+/* ---------- VIEWS ---------- */
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  const v=b.dataset.view;['guests','documents','templates','admin'].forEach(x=>document.getElementById('view-'+x).classList.toggle('hidden',x!==v));
+  if(v==='documents')loadDocuments();if(v==='admin')loadUsers();if(v==='templates')loadTemplateList();
+});
+async function loadDocuments(){
+  const docs=await api.get('/api/documents');
+  document.getElementById('dbody').innerHTML=docs.length?docs.map(d=>{
+    const tpl=state.templates.find(t=>t.id===d.template_id)||{label:d.template_id};
+    return `<tr><td>${esc(tpl.label)}</td><td>${esc(d.guest_name)}</td><td>${esc(d.villa)}</td>
+      <td><span class="dstat ${d.status}">${d.status}</span></td><td style="font-size:12px;color:var(--ink-soft)">${esc((d.updated_at||'').slice(0,16))}</td>
+      <td><button class="btn btn-gold btn-sm" onclick="window.open('/api/documents/${d.id}/export?format=docx')">Word</button>
+      <button class="btn btn-coral btn-sm" onclick="window.open('/api/documents/${d.id}/export?format=pdf')">PDF</button></td></tr>`;
+  }).join('') : '<tr><td colspan="6"><div class="empty">No documents created yet.</div></td></tr>';
+}
+
+/* ---------- ADMIN ---------- */
+async function loadUsers(){
+  const users=await api.get('/api/users');
+  document.getElementById('userList').innerHTML=users.map(u=>`
+    <div class="userrow"><div><strong>${esc(u.display_name||u.username)}</strong>
+      <span style="color:var(--ink-soft);font-size:12px">@${esc(u.username)}</span>
+      <span class="ur-role">${u.role}</span>
+      ${u.can_manage_templates?'<span class="ur-role" style="background:var(--gold-soft);color:var(--gold)">templates</span>':''}</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <label style="font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:5px;cursor:pointer">
+        <input type="checkbox" ${u.can_manage_templates?'checked':''} onchange="toggleTpl(${u.id},this.checked)"> Manage templates</label>
+      <button class="btn btn-ghost btn-sm" onclick="resetPwd(${u.id},'${esc(u.username)}')">Reset Password</button>
+      ${u.id!==state.user.id?`<button class="btn btn-ghost btn-sm" onclick="delUser(${u.id})">Delete</button>`:''}
+    </div></div>`).join('');
+}
+window.toggleTpl=async(id,val)=>{await api.post('/api/users/'+id+'/capabilities',{can_manage_templates:val});toast('Updated');};
+document.getElementById('addUserBtn').onclick=()=>openModal(`
+  <h3>Add Staff Account</h3>
+  <div class="field"><label>Display Name</label><input id="auName"></div>
+  <div class="field"><label>Username</label><input id="auUser"></div>
+  <div class="field"><label>Password</label><input id="auPass" type="text"></div>
+  <div class="field"><label>Role</label><select id="auRole"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+  <div class="field"><label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
+    <input type="checkbox" id="auTpl"> Can create &amp; edit document templates</label></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="auSave">Create</button></div>`,()=>{
+    document.getElementById('auSave').onclick=async()=>{
+      try{await api.post('/api/users',{display_name:document.getElementById('auName').value,
+        username:document.getElementById('auUser').value,password:document.getElementById('auPass').value,
+        role:document.getElementById('auRole').value,can_manage_templates:document.getElementById('auTpl').checked});
+        closeModal();loadUsers();toast('Account created');}
+      catch(e){toast(e.message);}
+    };
+  });
+window.resetPwd=(id,uname)=>openModal(`
+  <h3>Reset Password</h3><p style="color:var(--ink-soft);margin-bottom:14px">for @${uname}</p>
+  <div class="field"><label>New Password</label><input id="rpPass" type="text"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="rpSave">Update</button></div>`,()=>{
+    document.getElementById('rpSave').onclick=async()=>{
+      await api.post('/api/users/'+id+'/password',{password:document.getElementById('rpPass').value});closeModal();toast('Password updated');};
+  });
+window.delUser=async(id)=>{if(confirm('Delete this account?')){await api.del('/api/users/'+id);loadUsers();toast('Deleted');}};
+
+/* ---------- TEMPLATE BUILDER ---------- */
+let tplDraft=null, tplEditKey=null;
+
+async function loadTemplateList(){
+  const data=await api.get('/api/manage/templates');
+  state.signatories=data.signatories;
+  const groups={};data.templates.forEach(t=>{(groups[t.category]=groups[t.category]||[]).push(t);});
+  const wrap=document.getElementById('tplList');
+  wrap.innerHTML=Object.keys(groups).sort().map(cat=>`
+    <div class="tpl-cat-head">${esc(cat)}</div>
+    ${groups[cat].map(t=>`
+      <div class="tpl-row ${t.archived?'archived':''}">
+        <span class="tpl-cat">${esc(t.category)}</span>
+        <div class="tpl-name">${esc(t.label)}
+          <div class="tpl-meta">${t.hasDate?'has date · ':''}signatory: ${esc((state.signatories[t.signatory]||{}).name||t.signatory)}${t.archived?' · archived':''}</div>
+        </div>
+        <div class="tpl-actions">
+          <button class="btn btn-ghost btn-sm" onclick="editTemplate('${t.id}')">Edit</button>
+          <button class="btn btn-ghost btn-sm" onclick="dupTemplate('${t.id}')">Duplicate</button>
+          <button class="btn btn-ghost btn-sm" onclick="archiveTemplate('${t.id}',${t.archived?0:1})">${t.archived?'Restore':'Archive'}</button>
+        </div>
+      </div>`).join('')}
+  `).join('') || '<div class="empty">No templates yet.</div>';
+}
+
+function blankDraft(){return{template_key:'',category:'General',label:'',intro:'',lead:'',
+  body:['**Benefit goes here**'],closing:'',contact:'',note:'',signoff:'Warmest regards,',
+  signatory:Object.keys(state.signatories)[0]||'silvia',hasDate:false,dateLabel:'',topDate:false};}
+
+document.getElementById('newTplBtn').onclick=()=>{tplEditKey=null;tplDraft=blankDraft();renderTplEditor('New Template');};
+window.editTemplate=async(key)=>{const t=await api.get('/api/templates/'+key);tplEditKey=key;
+  tplDraft={template_key:t.id,category:t.category,label:t.label,intro:t.intro||'',lead:t.lead||'',
+    body:(t.body&&t.body.length?t.body:['']).slice(),closing:t.closing||'',contact:t.contact||'',note:t.note||'',
+    signoff:t.signoff||'Warmest regards,',signatory:t.signatory,hasDate:t.hasDate,dateLabel:t.dateLabel||'',topDate:t.topDate};
+  renderTplEditor('Edit: '+t.label);};
+window.dupTemplate=async(key)=>{const r=await api.post('/api/manage/templates/'+key+'/duplicate');toast('Duplicated');loadTemplateList();editTemplate(r.template_key);};
+window.archiveTemplate=async(key,v)=>{await api.post('/api/manage/templates/'+key+'/archive',{archived:v});toast(v?'Archived':'Restored');loadTemplateList();};
+
+function renderTplEditor(title){
+  document.getElementById('tplEditTitle').textContent=title;
+  const d=tplDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  document.getElementById('tplForm').innerHTML=`
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Document Name</label><input id="td_label" value="${esc(d.label)}" placeholder="e.g. Water Villa Disclaimer"></div>
+      <div class="tpl-field"><label>Category</label><input id="td_category" value="${esc(d.category)}" placeholder="e.g. Disclaimers" list="catlist">
+        <datalist id="catlist">${[...new Set(state.templates.map(t=>t.category))].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+    </div>
+    <div class="tpl-field"><label>Opening line — “Dear {{name}},” is added automatically</label>
+      <textarea id="td_intro" placeholder="Thank you for choosing Constance Halaveli Maldives…">${esc(d.intro)}</textarea></div>
+    <div class="tpl-field"><label>Lead-in sentence (optional)</label>
+      <textarea id="td_lead" placeholder="We have the great pleasure to inform you that…">${esc(d.lead)}</textarea></div>
+
+    <div class="tpl-field"><label>Body lines</label>
+      <div id="bodyLines"></div>
+      <div class="insert-row">
+        <button class="chipbtn" id="addBodyLine">+ Add line</button>
+        <span style="flex:1"></span>
+        <button class="chipbtn" data-ins="{{name}}">Insert {{name}}</button>
+        <button class="chipbtn" data-ins="{{date}}">Insert {{date}}</button>
+        <button class="chipbtn" data-ins="{{confirmation}}">Insert {{confirmation}}</button>
+        <button class="chipbtn" data-ins="{{villa}}">Insert {{villa}}</button>
+      </div>
+      <div class="hint">Wrap text in **double asterisks** for bold, _underscores_ for italic. Start a line with • for a bullet.</div>
+    </div>
+
+    <div class="tpl-field"><label>Closing line (optional)</label><textarea id="td_closing">${esc(d.closing)}</textarea></div>
+    <div class="tpl-field"><label>Contact line (optional)</label><textarea id="td_contact">${esc(d.contact)}</textarea></div>
+    <div class="tpl-field"><label>Footnote (optional, shown small &amp; italic)</label><textarea id="td_note">${esc(d.note)}</textarea></div>
+
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Sign-off</label><input id="td_signoff" value="${esc(d.signoff)}"></div>
+      <div class="tpl-field"><label>Default Signatory</label><select id="td_signatory">${sigOpts}</select></div>
+    </div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label><input type="checkbox" id="td_hasDate" ${d.hasDate?'checked':''}> Ask for a date when creating</label>
+        <input id="td_dateLabel" value="${esc(d.dateLabel)}" placeholder="Date label, e.g. Booked on" style="margin-top:6px"></div>
+      <div class="tpl-field"><label><input type="checkbox" id="td_topDate" ${d.topDate?'checked':''}> Show date at top (certificate style)</label></div>
+    </div>
+  `;
+  renderBodyLines();
+  // wire inputs -> draft + preview
+  const map={td_label:'label',td_category:'category',td_intro:'intro',td_lead:'lead',td_closing:'closing',td_contact:'contact',td_note:'note',td_signoff:'signoff',td_dateLabel:'dateLabel'};
+  Object.entries(map).forEach(([id,key])=>{const el=document.getElementById(id);el.oninput=()=>{d[key]=el.value;refreshPreview();};});
+  document.getElementById('td_signatory').onchange=e=>{d.signatory=e.target.value;refreshPreview();};
+  document.getElementById('td_hasDate').onchange=e=>{d.hasDate=e.target.checked;refreshPreview();};
+  document.getElementById('td_topDate').onchange=e=>{d.topDate=e.target.checked;refreshPreview();};
+  document.getElementById('addBodyLine').onclick=()=>{d.body.push('');renderBodyLines();refreshPreview();};
+  document.querySelectorAll('[data-ins]').forEach(b=>b.onclick=()=>{
+    if(lastBody!=null){d.body[lastBody]=(d.body[lastBody]||'')+b.dataset.ins;renderBodyLines();refreshPreview();}
+    else toast('Click into a body line first');
+  });
+  document.getElementById('tplEditor').classList.add('open');
+  refreshPreview();
+}
+
+let lastBody=null;
+function renderBodyLines(){
+  const d=tplDraft;const box=document.getElementById('bodyLines');
+  box.innerHTML=d.body.map((ln,i)=>`
+    <div class="body-line">
+      <textarea data-i="${i}" placeholder="Body text…">${esc(ln)}</textarea>
+      <div class="lt"><button class="rm" data-rm="${i}" title="Remove">✕</button></div>
+    </div>`).join('');
+  box.querySelectorAll('textarea').forEach(t=>{
+    t.onfocus=()=>lastBody=+t.dataset.i;
+    t.oninput=()=>{d.body[+t.dataset.i]=t.value;refreshPreview();};
+  });
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{d.body.splice(+b.dataset.rm,1);if(!d.body.length)d.body=[''];renderBodyLines();refreshPreview();});
+}
+
+function fmtInline(s){return esc(s).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/_([^_]+)_/g,'<em>$1</em>');}
+function refreshPreview(){
+  const d=tplDraft;const paper=document.getElementById('tplPaper');
+  const sig=state.signatories[d.signatory]||{name:'',title:''};
+  const sampleName='Mrs Kimura and Mr Mukai', sampleConf='419413056', sampleVilla='88', sampleDate='14th May 2026 at 19:00';
+  const fill=s=>s.replace(/\{\{name\}\}/g,sampleName).replace(/\{\{confirmation\}\}/g,sampleConf).replace(/\{\{villa\}\}/g,sampleVilla);
+  let h='';
+  if(d.topDate)h+=`<div class="pl" style="text-align:left">${esc(sampleDate)}</div>`;
+  h+=`<div class="pl">Dear ${esc(sampleName)},</div>`;
+  if(d.intro)h+=`<div class="pl">${fmtInline(fill(d.intro))}</div>`;
+  if(d.lead)h+=`<div class="pl">${fmtInline(fill(d.lead))}</div>`;
+  d.body.forEach(ln=>{
+    if(!ln)return;
+    let line=ln;
+    if(line.includes('{{date}}')){line=line.replace('{{date}}',d.hasDate?((d.dateLabel?d.dateLabel+' ':'')+sampleDate):'');if(!line.trim())return;}
+    line=fill(line);
+    const bullet=line.startsWith('•');
+    const bold=/^\*\*.*\*\*$/.test(line.trim());
+    const ital=/^_.*_$/.test(line.trim());
+    h+=`<div class="pl ${bullet?'bullet':''} ${bold?'b':''} ${ital?'i':''}">${fmtInline(line)}</div>`;
+  });
+  if(d.closing)h+=`<div class="pl">${fmtInline(fill(d.closing))}</div>`;
+  if(d.contact)h+=`<div class="pl">${fmtInline(fill(d.contact))}</div>`;
+  if(d.note)h+=`<div class="pl i">${fmtInline(fill(d.note))}</div>`;
+  h+=`<div class="pl" style="margin-top:24px">${esc(d.signoff||'')}</div>`;
+  h+=`<div class="pl">${esc(sig.name)}</div><div class="pl">${esc(sig.title)}</div>`;
+  h+=`<div class="pl conf">${esc(sampleConf)}</div>`;
+  paper.innerHTML=h;
+}
+
+document.getElementById('tplCancel').onclick=()=>document.getElementById('tplEditor').classList.remove('open');
+document.getElementById('tplSave').onclick=async()=>{
+  const d=tplDraft;
+  if(!d.label.trim())return toast('Give the document a name');
+  d.body=d.body.filter(l=>l!=null);
+  try{
+    if(tplEditKey){await api.put('/api/manage/templates/'+tplEditKey,d);}
+    else{const r=await api.post('/api/manage/templates',d);tplEditKey=r.template_key;}
+    // refresh the in-memory template list used by guest panel
+    const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
+    document.getElementById('tplEditor').classList.remove('open');
+    loadTemplateList();toast('Template saved');
+  }catch(e){toast(e.message);}
+};
+
+/* signatory management */
+document.getElementById('manageSignatoriesBtn').onclick=async()=>{
+  const sigs=await api.get('/api/manage/signatories');
+  openModal(`<h3>Signatories</h3>
+    <div id="sigList" style="margin-bottom:14px">${Object.entries(sigs).map(([k,v])=>`
+      <div class="userrow"><div><strong>${esc(v.name)}</strong><div style="font-size:12px;color:var(--ink-soft)">${esc(v.title)}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="delSig('${k}')">Remove</button></div>`).join('')}</div>
+    <div class="field"><label>Name</label><input id="sigName"></div>
+    <div class="field"><label>Title</label><input id="sigTitle"></div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary btn-sm" style="width:auto" id="sigSave">Add Signatory</button></div>`,()=>{
+      document.getElementById('sigSave').onclick=async()=>{
+        const name=document.getElementById('sigName').value,title=document.getElementById('sigTitle').value;
+        if(!name)return toast('Name required');
+        await api.post('/api/manage/signatories',{key:name,name,title});
+        const t=await api.get('/api/templates');state.signatories=t.signatories;
+        closeModal();toast('Signatory added');
+      };
+    });
+};
+window.delSig=async(k)=>{await api.del('/api/manage/signatories/'+k);const t=await api.get('/api/templates');state.signatories=t.signatories;toast('Removed');document.getElementById('manageSignatoriesBtn').click();};
+
+/* ---------- MODAL ---------- */
+function openModal(html,after){document.getElementById('modalInner').innerHTML=html;document.getElementById('modal').classList.add('open');if(after)after();}
+function closeModal(){document.getElementById('modal').classList.remove('open');}
+window.closeModal=closeModal;
+document.getElementById('modal').onclick=(e)=>{if(e.target.id==='modal')closeModal();};
+
+/* ---------- START ---------- */
+(async()=>{try{const d=await api.get('/api/me');state.user=d.user;await boot();}catch{showLogin();}})();
+</script>
+</body>
+</html>

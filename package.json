@@ -1,0 +1,18 @@
+{
+  "name": "halaveli-gdms",
+  "version": "1.0.0",
+  "description": "Guest Document Management System — arrival/in-house guest lists and voucher/document generation",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "docx": "^9.0.2",
+    "express": "^4.21.2"
+  },
+  "engines": { "node": ">=18" }
+}
