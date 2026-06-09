@@ -347,12 +347,32 @@ function toISO(d) {
   const mm = months[m[2].toLowerCase()]; if (!mm) return "";
   return `${m[3]}-${mm}-${m[1].padStart(2,"0")}`;
 }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+// Resort timezone offset in hours (Maldives = UTC+5). Override with TZ_OFFSET
+// env var if ever needed. This keeps "today"/"tomorrow" correct no matter
+// what timezone the server runs in (e.g. Render runs UTC).
+const TZ_OFFSET_HOURS = process.env.TZ_OFFSET ? Number(process.env.TZ_OFFSET) : 5;
+function localNow() { return new Date(Date.now() + TZ_OFFSET_HOURS * 3600000); }
+function todayISO() { return localNow().toISOString().slice(0, 10); }
+function tomorrowISO() { return new Date(localNow().getTime() + 86400000).toISOString().slice(0, 10); }
+// Add N days to a YYYY-MM-DD string
+function addDays(iso, n) {
+  const d = new Date(iso + "T00:00:00Z");
+  return new Date(d.getTime() + n * 86400000).toISOString().slice(0, 10);
+}
+// The reference "today" for all date logic is the SELECTED BUSINESS DAY, not
+// the real clock. Resolve it from the dayId; fall back to the real local date.
+function refDateForDay(dayId) {
+  if (dayId) {
+    const d = db.prepare("SELECT the_date FROM business_days WHERE id=?").get(dayId);
+    if (d && d.the_date) return d.the_date;
+  }
+  return todayISO();
+}
 
 app.get("/api/guests", auth, (req, res) => {
   const { dayId, listType, q } = req.query;
-  const today = todayISO();
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const today = refDateForDay(dayId);
+  const tomorrow = addDays(today, 1);
 
   // Base query — we post-filter the in-house/departure/active split in JS using
   // the departure date, so guests flow automatically without manual moves.
@@ -375,7 +395,7 @@ app.get("/api/guests", auth, (req, res) => {
       return g.list_type === "inhouse" && !isCheckedOut;
     }
     if (listType === "departure") {
-      // in-house guests due out today, tomorrow, or already overdue
+      // due out relative to the SELECTED BUSINESS DAY
       if (g.list_type !== "inhouse" || isCheckedOut) return false;
       if (!depISO) return false;
       if (depISO < today) g.dueGroup = "overdue";
@@ -453,8 +473,9 @@ app.post("/api/guests/:id/checkin", auth, (req, res) => {
 
   const isAdmin = req.user.role === "admin";
   const arrISO = toISO(g.arrival);
-  if (!isAdmin && arrISO && arrISO !== todayISO()) {
-    return res.status(403).json({ error: `Check-in is only allowed on the arrival date (${g.arrival}).` });
+  const ref = refDateForDay(req.body.dayId);
+  if (!isAdmin && arrISO && arrISO !== ref) {
+    return res.status(403).json({ error: `Check-in is only allowed on the arrival date (${g.arrival}). Switch the business day to that date, or ask an admin.` });
   }
   db.prepare("UPDATE guests SET list_type='inhouse', checked_in_at=datetime('now') WHERE id=?").run(g.id);
   res.json({ ok: true });
@@ -467,8 +488,9 @@ app.post("/api/guests/:id/checkout", auth, (req, res) => {
   if (!g) return res.status(404).json({ error: "Not found" });
   const isAdmin = req.user.role === "admin";
   const depISO = toISO(g.departure);
-  if (!isAdmin && depISO && depISO !== todayISO()) {
-    return res.status(403).json({ error: `Check-out is only allowed on the departure date (${g.departure}). Ask an admin for early or overdue check-outs.` });
+  const ref = refDateForDay(req.body.dayId);
+  if (!isAdmin && depISO && depISO !== ref) {
+    return res.status(403).json({ error: `Check-out is only allowed on the departure date (${g.departure}). Switch the business day to that date, or ask an admin.` });
   }
   db.prepare("UPDATE guests SET status='departed', checked_out_at=datetime('now') WHERE id=?").run(g.id);
   res.json({ ok: true });
