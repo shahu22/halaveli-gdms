@@ -567,12 +567,12 @@ function renderGuests(){
   });
   tb.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Check in this villa? It will move to In-House.'))return;
-    try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin');toast('Checked in');await loadGuests();}
+    try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin',{dayId:state.dayId});toast('Checked in');await loadGuests();}
     catch(err){toast(err.message);}
   });
   tb.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Check out this guest? They will move to the Checked Out list.'))return;
-    try{await api.post('/api/guests/'+b.dataset.checkout+'/checkout');toast('Checked out');await loadGuests();}
+    try{await api.post('/api/guests/'+b.dataset.checkout+'/checkout',{dayId:state.dayId});toast('Checked out');await loadGuests();}
     catch(err){toast(err.message);}
   });
   tb.querySelectorAll('[data-undo]').forEach(b=>b.onclick=async()=>{
@@ -671,10 +671,10 @@ function renderPanel(){
   // panel action buttons
   const pco=document.getElementById('pCheckout');if(pco)pco.onclick=async()=>{
     if(!confirm('Check out this guest?'))return;
-    try{await api.post('/api/guests/'+g.id+'/checkout');toast('Checked out');closePanel();}catch(e){toast(e.message);}};
+    try{await api.post('/api/guests/'+g.id+'/checkout',{dayId:state.dayId});toast('Checked out');closePanel();}catch(e){toast(e.message);}};
   const pci=document.getElementById('pCheckin');if(pci)pci.onclick=async()=>{
     if(!confirm('Check in this villa? It will move to In-House.'))return;
-    try{await api.post('/api/guests/'+g.id+'/checkin');toast('Checked in');closePanel();}catch(e){toast(e.message);}};
+    try{await api.post('/api/guests/'+g.id+'/checkin',{dayId:state.dayId});toast('Checked in');closePanel();}catch(e){toast(e.message);}};
   const pu=document.getElementById('pUndo');if(pu)pu.onclick=async()=>{
     try{await api.post('/api/guests/'+g.id+'/undo-checkout');toast('Restored');closePanel();}catch(e){toast(e.message);}};
   const pe=document.getElementById('pExtend');if(pe)pe.onclick=()=>{
