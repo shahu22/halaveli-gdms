@@ -378,7 +378,11 @@ app.get("/api/guests", auth, (req, res) => {
       // in-house guests due out today, tomorrow, or already overdue
       if (g.list_type !== "inhouse" || isCheckedOut) return false;
       if (!depISO) return false;
-      return depISO <= tomorrow;          // today, tomorrow, or past
+      if (depISO < today) g.dueGroup = "overdue";
+      else if (depISO === today) g.dueGroup = "today";
+      else if (depISO === tomorrow) g.dueGroup = "tomorrow";
+      else return false;
+      return true;
     }
     if (listType === "checkedout") {
       return isCheckedOut;
@@ -400,13 +404,9 @@ app.put("/api/guests/:id", auth, (req, res) => {
   if (!g) return res.status(404).json({ error: "Not found" });
   const isAdmin = req.user.role === "admin";
 
-  // Locking: once a booking is in-house (checked in), normal staff cannot edit
-  // any fields. Admin can always edit.
-  if (g.list_type === "inhouse" && !isAdmin) {
-    return res.status(403).json({ error: "This booking is checked in and locked. Ask an admin to make changes." });
-  }
-
-  // Fields only an admin may change (dates, flights, villa moves).
+  // Per-field ownership (no blanket lock). These structural fields are
+  // admin-only; everything else (name, meal plan, nationality, remarks, flags)
+  // is editable by any logged-in staff member, including on in-house bookings.
   const adminOnlyFields = ["arrival","departure","arrival_flight","departure_flight","villa","confirmation"];
   const allowed = ["villa","villa_type","arrival","departure","arrival_flight","departure_flight",
     "meal_plan","nationality","confirmation","name","adults","children","hm","anniversary",
@@ -415,7 +415,7 @@ app.put("/api/guests/:id", auth, (req, res) => {
   const sets = [], vals = [];
   for (const k of allowed) {
     if (k in req.body) {
-      if (adminOnlyFields.includes(k) && !isAdmin) continue; // silently skip locked fields for staff
+      if (adminOnlyFields.includes(k) && !isAdmin) continue; // staff can't touch admin fields
       sets.push(`${k}=?`);
       vals.push(typeof req.body[k] === "boolean" ? (req.body[k] ? 1 : 0) : req.body[k]);
     }
@@ -427,11 +427,8 @@ app.put("/api/guests/:id", auth, (req, res) => {
   res.json({ ok: true });
 });
 
-// Recompute formatted name from edited guest objects
+// Recompute formatted name from edited guest objects (name is staff-editable)
 app.post("/api/guests/:id/rebuild-name", auth, (req, res) => {
-  const g = db.prepare("SELECT list_type FROM guests WHERE id=?").get(req.params.id);
-  if (g && g.list_type === "inhouse" && req.user.role !== "admin")
-    return res.status(403).json({ error: "Locked — ask an admin." });
   const guests = req.body.guests || [];
   const childCount = guests.filter((x) => x.role === "child").length;
   const name = P.buildName(guests, childCount);
@@ -468,6 +465,11 @@ app.post("/api/guests/:id/checkin", auth, (req, res) => {
 app.post("/api/guests/:id/checkout", auth, (req, res) => {
   const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
   if (!g) return res.status(404).json({ error: "Not found" });
+  const isAdmin = req.user.role === "admin";
+  const depISO = toISO(g.departure);
+  if (!isAdmin && depISO && depISO !== todayISO()) {
+    return res.status(403).json({ error: `Check-out is only allowed on the departure date (${g.departure}). Ask an admin for early or overdue check-outs.` });
+  }
   db.prepare("UPDATE guests SET status='departed', checked_out_at=datetime('now') WHERE id=?").run(g.id);
   res.json({ ok: true });
 });
