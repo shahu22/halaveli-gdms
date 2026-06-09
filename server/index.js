@@ -352,6 +352,7 @@ function todayISO() { return new Date().toISOString().slice(0, 10); }
 app.get("/api/guests", auth, (req, res) => {
   const { dayId, listType, q } = req.query;
   const today = todayISO();
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
   // Base query — we post-filter the in-house/departure/active split in JS using
   // the departure date, so guests flow automatically without manual moves.
@@ -365,17 +366,22 @@ app.get("/api/guests", auth, (req, res) => {
 
   rows = rows.filter((g) => {
     const depISO = toISO(g.departure);
-    const departed = depISO && depISO < today;          // departure date already passed
+    const isCheckedOut = g.status === "departed";
     if (listType === "arrival") {
-      return g.list_type === "arrival" && g.status !== "departed";
+      return g.list_type === "arrival" && !isCheckedOut;
     }
     if (listType === "inhouse") {
-      // checked in, not yet at/after departure
-      return g.list_type === "inhouse" && g.status !== "departed" && (!depISO || depISO > today);
+      // everyone currently in-house and not yet checked out
+      return g.list_type === "inhouse" && !isCheckedOut;
     }
     if (listType === "departure") {
-      // checked in and departing today
-      return g.list_type === "inhouse" && g.status !== "departed" && depISO && depISO === today;
+      // in-house guests due out today, tomorrow, or already overdue
+      if (g.list_type !== "inhouse" || isCheckedOut) return false;
+      if (!depISO) return false;
+      return depISO <= tomorrow;          // today, tomorrow, or past
+    }
+    if (listType === "checkedout") {
+      return isCheckedOut;
     }
     return true;
   });
@@ -454,6 +460,21 @@ app.post("/api/guests/:id/checkin", auth, (req, res) => {
     return res.status(403).json({ error: `Check-in is only allowed on the arrival date (${g.arrival}).` });
   }
   db.prepare("UPDATE guests SET list_type='inhouse', checked_in_at=datetime('now') WHERE id=?").run(g.id);
+  res.json({ ok: true });
+});
+
+// ---- Check out a guest -> ends the stay (staff + admin) ------------------
+// Works any day: handles on-time, early, and overdue departures alike.
+app.post("/api/guests/:id/checkout", auth, (req, res) => {
+  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
+  if (!g) return res.status(404).json({ error: "Not found" });
+  db.prepare("UPDATE guests SET status='departed', checked_out_at=datetime('now') WHERE id=?").run(g.id);
+  res.json({ ok: true });
+});
+
+// ---- Undo a check-out (admin only) — restores to in-house ----------------
+app.post("/api/guests/:id/undo-checkout", auth, adminOnly, (req, res) => {
+  db.prepare("UPDATE guests SET status='active', checked_out_at=NULL WHERE id=?").run(req.params.id);
   res.json({ ok: true });
 });
 
