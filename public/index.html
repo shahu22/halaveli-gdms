@@ -125,6 +125,7 @@
 
   .toggle-row{display:flex;gap:8px;margin-bottom:8px}
   .lockbar{background:var(--gold-soft);color:var(--gold);border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:500;margin-bottom:14px;line-height:1.5}
+  .panel-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
   .toggle.lk{opacity:.6;cursor:not-allowed}
   .toggle{flex:1;border:1.5px solid var(--line);border-radius:11px;padding:11px;text-align:center;cursor:pointer;background:var(--white)}
   .toggle .ti{font-size:18px}
@@ -283,6 +284,7 @@
           <button data-lt="arrival" class="on">Arrivals</button>
           <button data-lt="inhouse">In-House</button>
           <button data-lt="departure">Departures</button>
+          <button data-lt="checkedout">Checked Out</button>
         </div>
       </div>
 
@@ -524,8 +526,10 @@ function renderGuests(){
       <td><span class="doc-count" data-id="${g.id}">·</span></td>
       <td style="white-space:nowrap">
         ${state.listType==='arrival'?`<button class="btn btn-coral btn-sm" data-checkin="${g.id}" style="margin-right:4px">Check In</button>`:''}
+        ${(state.listType==='inhouse'||state.listType==='departure')?`<button class="btn btn-coral btn-sm" data-checkout="${g.id}" style="margin-right:4px">Check Out</button>`:''}
+        ${(state.listType==='checkedout'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" data-undo="${g.id}" style="margin-right:4px">Undo</button>`:''}
         <button class="linkbtn" data-open="${g.id}">Open</button></td>
-    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType==='checkedout'?'checked-out':state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
   tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
     const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
     const field=f.dataset.f;g[field]=!g[field];
@@ -541,6 +545,15 @@ function renderGuests(){
   tb.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Check in this villa? It will move to In-House and be locked for editing.'))return;
     try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin');toast('Checked in');await loadGuests();}
+    catch(err){toast(err.message);}
+  });
+  tb.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Check out this guest? They will move to the Checked Out list.'))return;
+    try{await api.post('/api/guests/'+b.dataset.checkout+'/checkout');toast('Checked out');await loadGuests();}
+    catch(err){toast(err.message);}
+  });
+  tb.querySelectorAll('[data-undo]').forEach(b=>b.onclick=async()=>{
+    try{await api.post('/api/guests/'+b.dataset.undo+'/undo-checkout');toast('Restored to In-House');await loadGuests();}
     catch(err){toast(err.message);}
   });
   tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
@@ -573,6 +586,13 @@ function renderPanel(){
   const adminDis=state.isAdmin?'':'disabled';                 // dates/flights admin-only
   body.innerHTML=`
     ${locked?`<div class="lockbar">🔒 This booking is checked in and locked. You can still generate documents below. Ask an admin to change details.</div>`:''}
+    <div class="panel-actions">
+      ${(g.list_type==='inhouse'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckout">Check Out</button>`:''}
+      ${(g.list_type==='arrival'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckin">Check In</button>`:''}
+      ${(g.status==='departed'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" id="pUndo">Undo Check-Out</button>`:''}
+      ${(g.list_type==='inhouse'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" id="pExtend">Extend / Change Dates</button>`:''}
+      ${g.status==='departed'?`<span class="pill closed">Checked out</span>`:''}
+    </div>
     <div class="toggle-row">
       <div class="toggle hm ${g.hm?'on':''} ${locked?'lk':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
       <div class="toggle an ${g.anniversary?'on':''} ${locked?'lk':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
@@ -629,6 +649,17 @@ function renderPanel(){
   if(!locked){buildNameEditor();const sd=document.getElementById('saveDetails');if(sd)sd.onclick=saveDetails;}
   body.querySelectorAll('.vopt').forEach(v=>v.onclick=()=>toggleVoucher(v.dataset.tpl,v));
   renderDocList();
+  // panel action buttons
+  const pco=document.getElementById('pCheckout');if(pco)pco.onclick=async()=>{
+    if(!confirm('Check out this guest?'))return;
+    try{await api.post('/api/guests/'+g.id+'/checkout');toast('Checked out');closePanel();}catch(e){toast(e.message);}};
+  const pci=document.getElementById('pCheckin');if(pci)pci.onclick=async()=>{
+    if(!confirm('Check in this villa? It will move to In-House and be locked.'))return;
+    try{await api.post('/api/guests/'+g.id+'/checkin');toast('Checked in');closePanel();}catch(e){toast(e.message);}};
+  const pu=document.getElementById('pUndo');if(pu)pu.onclick=async()=>{
+    try{await api.post('/api/guests/'+g.id+'/undo-checkout');toast('Restored');closePanel();}catch(e){toast(e.message);}};
+  const pe=document.getElementById('pExtend');if(pe)pe.onclick=()=>{
+    const el=document.getElementById('f_departure');if(el){el.focus();el.scrollIntoView({behavior:'smooth',block:'center'});toast('Edit the Departure date, then Save Details');}};
 }
 
 function buildNameEditor(){
