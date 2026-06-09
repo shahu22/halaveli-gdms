@@ -109,6 +109,9 @@
   .linkbtn{background:none;color:var(--sea);font-weight:500;font-size:12px;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
   .linkbtn:hover{border-color:var(--sea);background:var(--sea-light)}
   .empty{text-align:center;padding:50px;color:var(--ink-soft)}
+  .sec-row td{background:var(--sand-deep);font-family:'Cormorant Garamond',serif;font-size:16px;font-weight:600;color:var(--sea-deep);padding:10px 14px!important;letter-spacing:.3px}
+  .sec-row.overdue td{background:var(--coral-soft);color:var(--coral)}
+  .sec-row.tomorrow td{background:var(--gold-soft);color:var(--gold)}
 
   /* PANEL */
   .overlay{position:fixed;inset:0;background:rgba(15,25,25,.4);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .25s;z-index:90}
@@ -507,7 +510,7 @@ function renderGuests(){
     <div class="stat gold"><div class="n">${state.guests.filter(g=>g.anniversary).length}</div><div class="l">Anniversary</div></div>
     <div class="stat"><div class="n">${state.guests.filter(g=>g.repeater).length}</div><div class="l">Repeater</div></div>`;
   const tb=document.getElementById('gbody');
-  tb.innerHTML=rows.length?rows.map(g=>`
+  const rowHtml=(g)=>`
     <tr data-id="${g.id}">
       <td><div class="flagwrap">
         <span class="flag hm ${g.hm?'on':''}" data-f="hm" title="Honeymoon">♡</span>
@@ -529,7 +532,27 @@ function renderGuests(){
         ${(state.listType==='inhouse'||state.listType==='departure')?`<button class="btn btn-coral btn-sm" data-checkout="${g.id}" style="margin-right:4px">Check Out</button>`:''}
         ${(state.listType==='checkedout'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" data-undo="${g.id}" style="margin-right:4px">Undo</button>`:''}
         <button class="linkbtn" data-open="${g.id}">Open</button></td>
-    </tr>`).join('') : `<tr><td colspan="11"><div class="empty">No ${state.listType==='checkedout'?'checked-out':state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
+    </tr>`;
+  const sectionRow=(label,cls)=>`<tr class="sec-row ${cls}"><td colspan="11">${label}</td></tr>`;
+
+  if(!rows.length){
+    tb.innerHTML=`<tr><td colspan="11"><div class="empty">No ${state.listType==='checkedout'?'checked-out':state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
+  } else if(state.listType==='departure'){
+    // three stacked sections: Today, Tomorrow, Overdue
+    const groups=[
+      {key:'today',label:'Departing Today',cls:'today'},
+      {key:'tomorrow',label:'Departing Tomorrow',cls:'tomorrow'},
+      {key:'overdue',label:'Overdue — not yet checked out',cls:'overdue'},
+    ];
+    let html='';
+    groups.forEach(grp=>{
+      const gr=rows.filter(g=>g.dueGroup===grp.key);
+      if(gr.length){html+=sectionRow(`${grp.label} (${gr.length})`,grp.cls)+gr.map(rowHtml).join('');}
+    });
+    tb.innerHTML=html||`<tr><td colspan="11"><div class="empty">No departures due today or tomorrow.</div></td></tr>`;
+  } else {
+    tb.innerHTML=rows.map(rowHtml).join('');
+  }
   tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
     const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
     const field=f.dataset.f;g[field]=!g[field];
@@ -543,7 +566,7 @@ function renderGuests(){
     renderGuests();
   });
   tb.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{
-    if(!confirm('Check in this villa? It will move to In-House and be locked for editing.'))return;
+    if(!confirm('Check in this villa? It will move to In-House.'))return;
     try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin');toast('Checked in');await loadGuests();}
     catch(err){toast(err.message);}
   });
@@ -581,11 +604,8 @@ function renderPanel(){
   const body=document.getElementById('panelBody');
   const byCat={};state.templates.forEach(t=>{(byCat[t.category]=byCat[t.category]||[]).push(t);});
   const selectedIds=new Set(panelDocs.map(d=>d.template_id));
-  const locked=(g.list_type==='inhouse')&&!state.isAdmin;     // staff can't edit in-house
-  const dis=locked?'disabled':'';
-  const adminDis=state.isAdmin?'':'disabled';                 // dates/flights admin-only
+  const adminDis=state.isAdmin?'':'disabled';                 // dates/flights/villa/conf admin-only
   body.innerHTML=`
-    ${locked?`<div class="lockbar">🔒 This booking is checked in and locked. You can still generate documents below. Ask an admin to change details.</div>`:''}
     <div class="panel-actions">
       ${(g.list_type==='inhouse'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckout">Check Out</button>`:''}
       ${(g.list_type==='arrival'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckin">Check In</button>`:''}
@@ -594,34 +614,34 @@ function renderPanel(){
       ${g.status==='departed'?`<span class="pill closed">Checked out</span>`:''}
     </div>
     <div class="toggle-row">
-      <div class="toggle hm ${g.hm?'on':''} ${locked?'lk':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
-      <div class="toggle an ${g.anniversary?'on':''} ${locked?'lk':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
-      <div class="toggle rp ${g.repeater?'on':''} ${locked?'lk':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
+      <div class="toggle hm ${g.hm?'on':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
+      <div class="toggle an ${g.anniversary?'on':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
+      <div class="toggle rp ${g.repeater?'on':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
     </div>
     <div class="field ${g.repeater?'':'hidden'}" id="stayWrap" style="margin-top:8px">
       <label>Which stay is this? (manual — from guest profile notes)</label>
-      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th" ${dis}>
+      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th">
     </div>
 
     <div class="section-title">Guest Details</div>
     <div class="grid2">
       <div class="field"><label>Villa ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_villa" value="${esc(g.villa)}" ${adminDis}></div>
-      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry" ${dis}></div>
+      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry"></div>
       <div class="field"><label>Arrival ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival" value="${esc(g.arrival||'')}" ${adminDis}></div>
       <div class="field"><label>Departure ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure" value="${esc(g.departure||'')}" ${adminDis}></div>
       <div class="field"><label>Arrival Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival_flight" value="${esc(g.arrival_flight||'')}" ${adminDis}></div>
       <div class="field"><label>Departure Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure_flight" value="${esc(g.departure_flight||'')}" ${adminDis}></div>
-      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown" ${dis}></div>
+      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown"></div>
       <div class="field"><label>Confirmation ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_confirmation" value="${esc(g.confirmation)}" ${adminDis}></div>
     </div>
     <div class="field"><label>Remarks / Booking Notes</label>
-      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical" ${dis}>${esc(g.remarks||'')}</textarea></div>
+      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical">${esc(g.remarks||'')}</textarea></div>
 
     <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
     <div class="preview" id="namePrev">${esc(g.name)}</div>
-    <div class="nameedit ${locked?'hidden':''}" id="nameEdit"></div>
+    <div class="nameedit" id="nameEdit"></div>
     <input id="f_name" type="hidden" value="${esc(g.name)}">
-    <div style="margin-top:8px" class="${locked?'hidden':''}"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
+    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
 
     <div class="section-title">Vouchers &amp; Documents</div>
     ${Object.keys(byCat).map(cat=>`
@@ -641,12 +661,11 @@ function renderPanel(){
   `;
 
   body.querySelectorAll('.toggle').forEach(t=>t.onclick=async()=>{
-    if(locked)return;
     const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');
     if(f==='repeater'){document.getElementById('stayWrap').classList.toggle('hidden',!g[f]);}
     await api.put('/api/guests/'+g.id,{[f]:g[f]});
   });
-  if(!locked){buildNameEditor();const sd=document.getElementById('saveDetails');if(sd)sd.onclick=saveDetails;}
+  buildNameEditor();const sd=document.getElementById('saveDetails');if(sd)sd.onclick=saveDetails;
   body.querySelectorAll('.vopt').forEach(v=>v.onclick=()=>toggleVoucher(v.dataset.tpl,v));
   renderDocList();
   // panel action buttons
@@ -654,7 +673,7 @@ function renderPanel(){
     if(!confirm('Check out this guest?'))return;
     try{await api.post('/api/guests/'+g.id+'/checkout');toast('Checked out');closePanel();}catch(e){toast(e.message);}};
   const pci=document.getElementById('pCheckin');if(pci)pci.onclick=async()=>{
-    if(!confirm('Check in this villa? It will move to In-House and be locked.'))return;
+    if(!confirm('Check in this villa? It will move to In-House.'))return;
     try{await api.post('/api/guests/'+g.id+'/checkin');toast('Checked in');closePanel();}catch(e){toast(e.message);}};
   const pu=document.getElementById('pUndo');if(pu)pu.onclick=async()=>{
     try{await api.post('/api/guests/'+g.id+'/undo-checkout');toast('Restored');closePanel();}catch(e){toast(e.message);}};
