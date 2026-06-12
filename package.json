@@ -1,6 +1,6 @@
 {
   "name": "halaveli-gdms",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Guest Document Management System — arrival/in-house guest lists and voucher/document generation",
   "main": "server/index.js",
   "scripts": {
