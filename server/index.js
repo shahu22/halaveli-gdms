@@ -619,6 +619,42 @@ app.delete("/api/album/:guestId/:personIndex/photo", auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// People (with photos) for grid exports. mode=inhouse (default) or mode=departure-tomorrow.
+app.get("/api/album-export", auth, (req, res) => {
+  const mode = req.query.mode || "inhouse";
+  const dayId = req.query.dayId;
+  let bookings;
+  if (mode === "departure-tomorrow") {
+    const ref = refDateForDay(dayId);
+    const tmr = addDays(ref, 1);
+    bookings = db.prepare(
+      "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
+    ).all().filter((b) => toISO(b.departure) === tmr);
+  } else {
+    bookings = db.prepare(
+      "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
+    ).all();
+  }
+  const profiles = db.prepare("SELECT * FROM guest_profiles").all();
+  const pIndex = {};
+  profiles.forEach((p) => { pIndex[`${p.guest_id}:${p.person_index}`] = p; });
+
+  const people = [];
+  for (const b of bookings) {
+    const list = safeParse(b.guests_json, []);
+    list.forEach((person, i) => {
+      const prof = pIndex[`${b.id}:${i}`] || {};
+      const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
+        || person.last || person.first || `Guest ${i + 1}`;
+      people.push({
+        villa: b.villa, displayName: display, isLead: i === 0,
+        departure: b.departure, photo: prof.photo || null,
+      });
+    });
+  }
+  res.json(people);
+});
+
 function hydrateGuest(g) {
   return {
     ...g,
