@@ -212,6 +212,7 @@
   .tpl-field input,.tpl-field select,.tpl-field textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#fff;font-size:13px}
   .tpl-field textarea{resize:vertical;line-height:1.5}
   .tpl-field .hint{font-size:11px;color:var(--ink-soft);margin-top:4px}
+  .doc-edit-note{background:var(--sea-light);color:var(--sea-deep);border-radius:9px;padding:10px 13px;font-size:12px;line-height:1.5;margin-bottom:16px}
   .tpl-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .body-line{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
   .body-line textarea{flex:1;min-height:38px}
@@ -243,7 +244,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.1</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -337,6 +338,27 @@
         Only administrators can create accounts and set passwords. Grant “Manage templates” to let trusted staff
         create and edit document templates without full admin access.
       </p>
+    </div>
+  </div>
+</div>
+
+<!-- DOCUMENT EDITOR (full overlay) -->
+<div class="tpl-editor" id="docEditor">
+  <div class="tpl-editor-head">
+    <div><span id="docEditTitle">Edit Voucher</span></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" id="docResetOverride" title="Revert to the template's original wording">Reset to template</button>
+      <button class="btn btn-ghost btn-sm" id="docEditCancel">Close</button>
+      <button class="btn btn-gold btn-sm" style="width:auto" id="docExportWord">⬇ Word</button>
+      <button class="btn btn-coral btn-sm" style="width:auto" id="docExportPdf">⬇ PDF</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="docEditSave">Save</button>
+    </div>
+  </div>
+  <div class="tpl-editor-body">
+    <div class="tpl-form" id="docForm"></div>
+    <div class="tpl-preview-pane">
+      <div class="tpl-preview-label">Live Preview</div>
+      <div class="tpl-paper" id="docPaper"></div>
     </div>
   </div>
 </div>
@@ -745,6 +767,7 @@ function renderDocList(){
       <label class="mini-label">Signatory</label>
       <select data-k="signatory">${Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${(d.signatory===k)?'selected':''}>${v.name} — ${v.title}</option>`).join('')}</select>
       <div class="drow">
+        <button class="btn btn-primary btn-sm" data-preview="${d.id}">Preview &amp; Edit</button>
         <button class="btn btn-ghost btn-sm" data-save="${d.id}">Save</button>
         <button class="btn btn-gold btn-sm" data-exp="${d.id}" data-fmt="docx">⬇ Word</button>
         <button class="btn btn-coral btn-sm" data-exp="${d.id}" data-fmt="pdf">⬇ PDF</button>
@@ -760,6 +783,7 @@ function renderDocList(){
     await api.put('/api/documents/'+id,{fields,signatory});toast('Saved');
     const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();
   });
+  wrap.querySelectorAll('[data-preview]').forEach(b=>b.onclick=()=>openDocEditor(b.dataset.preview));
   wrap.querySelectorAll('[data-exp]').forEach(b=>b.onclick=()=>{
     window.open('/api/documents/'+b.dataset.exp+'/export?format='+b.dataset.fmt,'_blank');
   });
@@ -768,6 +792,127 @@ function renderDocList(){
     const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();renderPanel();
   });
 }
+
+/* ---------- PER-DOCUMENT EDITOR (Preview & Edit) ---------- */
+let docDraft=null, docId=null, docMeta=null;
+
+async function openDocEditor(id){
+  docId=id;
+  const full=await api.get('/api/documents/'+id+'/full');
+  docMeta=full;
+  const r=full.resolved;
+  // draft holds the editable content + fields for THIS document
+  docDraft={
+    name:full.fields.name||'',
+    date:full.fields.date||'',
+    confirmation:full.fields.confirmation||panelGuest.confirmation||'',
+    signatory:full.signatory,
+    intro:r.intro||'', lead:r.lead||'', body:(r.body||[]).slice(),
+    closing:r.closing||'', contact:r.contact||'', note:r.note||'',
+    signoff:r.signoff||'Warmest regards,',
+    hasDate:r.hasDate, dateLabel:r.dateLabel||'', topDate:r.topDate,
+    label:r.label,
+  };
+  document.getElementById('docEditTitle').textContent='Edit: '+r.label;
+  renderDocEditor();
+  document.getElementById('docEditor').classList.add('open');
+}
+
+function renderDocEditor(){
+  const d=docDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  document.getElementById('docForm').innerHTML=`
+    <div class="doc-edit-note">Editing here changes <strong>only this guest's voucher</strong>. The master template stays unchanged. Use this to set timings, dates, or tweak wording for pre-confirmed bookings.</div>
+    <div class="tpl-field"><label>Guest Name on Voucher</label><input id="de_name" value="${esc(d.name)}"></div>
+    ${d.hasDate?`<div class="tpl-field"><label>${esc(d.dateLabel||'Date / Timing')}</label><input id="de_date" value="${esc(d.date)}" placeholder="e.g. 27th May 2026 at 19:00 – 20:30"></div>`:''}
+    <div class="tpl-field"><label>Opening (“Dear …,” is added automatically)</label><textarea id="de_intro">${esc(d.intro)}</textarea></div>
+    <div class="tpl-field"><label>Lead-in sentence</label><textarea id="de_lead">${esc(d.lead)}</textarea></div>
+    <div class="tpl-field"><label>Body lines</label><div id="de_body"></div>
+      <div class="insert-row"><button class="chipbtn" id="de_addLine">+ Add line</button></div>
+      <div class="hint">**bold**, _italic_, start a line with • for a bullet. Use {{date}} where the timing should appear.</div>
+    </div>
+    <div class="tpl-field"><label>Closing</label><textarea id="de_closing">${esc(d.closing)}</textarea></div>
+    <div class="tpl-field"><label>Contact line</label><textarea id="de_contact">${esc(d.contact)}</textarea></div>
+    <div class="tpl-field"><label>Footnote</label><textarea id="de_note">${esc(d.note)}</textarea></div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Sign-off</label><input id="de_signoff" value="${esc(d.signoff)}"></div>
+      <div class="tpl-field"><label>Signatory</label><select id="de_signatory">${sigOpts}</select></div>
+    </div>`;
+  renderDocBodyLines();
+  const map={de_name:'name',de_date:'date',de_intro:'intro',de_lead:'lead',de_closing:'closing',de_contact:'contact',de_note:'note',de_signoff:'signoff'};
+  Object.entries(map).forEach(([id,key])=>{const el=document.getElementById(id);if(el)el.oninput=()=>{d[key]=el.value;refreshDocPreview();};});
+  document.getElementById('de_signatory').onchange=e=>{d.signatory=e.target.value;refreshDocPreview();};
+  document.getElementById('de_addLine').onclick=()=>{d.body.push('');renderDocBodyLines();refreshDocPreview();};
+  refreshDocPreview();
+}
+
+function renderDocBodyLines(){
+  const d=docDraft;const box=document.getElementById('de_body');
+  box.innerHTML=d.body.map((ln,i)=>`
+    <div class="body-line">
+      <textarea data-i="${i}" placeholder="Body text…">${esc(ln)}</textarea>
+      <button class="rm" data-rm="${i}">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('textarea').forEach(t=>t.oninput=()=>{d.body[+t.dataset.i]=t.value;refreshDocPreview();});
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{d.body.splice(+b.dataset.rm,1);if(!d.body.length)d.body=[''];renderDocBodyLines();refreshDocPreview();});
+}
+
+function refreshDocPreview(){
+  const d=docDraft;const paper=document.getElementById('docPaper');
+  const sig=state.signatories[d.signatory]||{name:'',title:''};
+  const fill=s=>String(s).replace(/\{\{name\}\}/g,d.name||'').replace(/\{\{confirmation\}\}/g,d.confirmation||'').replace(/\{\{villa\}\}/g,panelGuest.villa||'');
+  let h='';
+  if(d.topDate&&d.date)h+=`<div class="pl" style="text-align:left">${esc(d.date)}</div>`;
+  h+=`<div class="pl">Dear ${esc(d.name||'[name]')},</div>`;
+  if(d.intro)h+=`<div class="pl">${fmtInline(fill(d.intro))}</div>`;
+  if(d.lead)h+=`<div class="pl">${fmtInline(fill(d.lead))}</div>`;
+  d.body.forEach(ln=>{
+    if(!ln)return;let line=ln;
+    if(line.includes('{{date}}')){line=line.replace('{{date}}',d.date?((d.dateLabel?d.dateLabel+' ':'')+d.date):'');if(!line.trim())return;}
+    line=fill(line);
+    const bullet=line.startsWith('•');const bold=/^\*\*.*\*\*$/.test(line.trim());const ital=/^_.*_$/.test(line.trim());
+    h+=`<div class="pl ${bullet?'bullet':''} ${bold?'b':''} ${ital?'i':''}">${fmtInline(line)}</div>`;
+  });
+  if(d.closing)h+=`<div class="pl">${fmtInline(fill(d.closing))}</div>`;
+  if(d.contact)h+=`<div class="pl">${fmtInline(fill(d.contact))}</div>`;
+  if(d.note)h+=`<div class="pl i">${fmtInline(fill(d.note))}</div>`;
+  h+=`<div class="pl" style="margin-top:24px">${esc(d.signoff||'')}</div>`;
+  h+=`<div class="pl">${esc(sig.name)}</div><div class="pl">${esc(sig.title)}</div>`;
+  if(d.confirmation)h+=`<div class="pl conf">${esc(d.confirmation)}</div>`;
+  paper.innerHTML=h;
+}
+
+function docDraftToPayload(){
+  const d=docDraft;
+  // build override (content) + fields (name/date/confirmation)
+  const override={intro:d.intro,lead:d.lead,body:d.body,closing:d.closing,contact:d.contact,note:d.note,signoff:d.signoff,dateLabel:d.dateLabel};
+  const fields={name:d.name,date:d.date,confirmation:d.confirmation,override};
+  return {fields,signatory:d.signatory};
+}
+
+async function saveDocEdits(){
+  try{await api.put('/api/documents/'+docId,docDraftToPayload());toast('Saved');
+    if(panelGuest){const g=await api.get('/api/guests/'+panelGuest.id);panelDocs=g.documents;renderDocList();}
+  }catch(e){toast(e.message);}
+}
+
+document.getElementById('docEditCancel').onclick=()=>document.getElementById('docEditor').classList.remove('open');
+document.getElementById('docEditSave').onclick=async()=>{await saveDocEdits();document.getElementById('docEditor').classList.remove('open');};
+document.getElementById('docResetOverride').onclick=async()=>{
+  if(!confirm('Revert this voucher to the template’s original wording? Your edits to this document will be removed.'))return;
+  // clear override but keep name/date
+  const fields={name:docDraft.name,date:docDraft.date,confirmation:docDraft.confirmation};
+  await api.put('/api/documents/'+docId,{fields,signatory:docDraft.signatory});
+  toast('Reverted to template');
+  document.getElementById('docEditor').classList.remove('open');
+  if(panelGuest){const g=await api.get('/api/guests/'+panelGuest.id);panelDocs=g.documents;renderDocList();}
+};
+async function exportFromEditor(fmt){
+  await saveDocEdits();                       // persist before exporting
+  window.open('/api/documents/'+docId+'/export?format='+fmt,'_blank');
+}
+document.getElementById('docExportWord').onclick=()=>exportFromEditor('docx');
+document.getElementById('docExportPdf').onclick=()=>exportFromEditor('pdf');
 
 /* ---------- VIEWS ---------- */
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{
