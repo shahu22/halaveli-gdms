@@ -103,6 +103,24 @@ CREATE TABLE IF NOT EXISTS signatories (
   title TEXT NOT NULL,
   sort_order INTEGER DEFAULT 100
 );
+
+-- One row per PERSON within a booking (guest_id + person index).
+-- Holds the Album photo (base64) and profile data. Kept separate from the
+-- guests row so large photo data doesn't bloat the main guest queries.
+CREATE TABLE IF NOT EXISTS guest_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guest_id INTEGER NOT NULL,          -- the booking
+  person_index INTEGER NOT NULL,      -- which person in guests_json (0 = lead)
+  photo TEXT,                         -- base64 data URL of the 3:4 cropped image
+  allergies TEXT,
+  likes TEXT,
+  occasions TEXT,
+  comments TEXT,                      -- free-form profile comments
+  history TEXT,                       -- notes of what happened this stay
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(guest_id, person_index),
+  FOREIGN KEY (guest_id) REFERENCES guests(id)
+);
 `);
 
 // ---- Lightweight migrations for existing installs -------------------------
