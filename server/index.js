@@ -569,6 +569,23 @@ app.delete("/api/documents/:id", auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Full document detail for the per-document editor: base template content
+// merged with any per-document override, plus the fields.
+app.get("/api/documents/:id/full", auth, (req, res) => {
+  const doc = db.prepare("SELECT * FROM documents WHERE id=?").get(req.params.id);
+  if (!doc) return res.status(404).json({ error: "Not found" });
+  const base = getTemplate(doc.template_id, doc.lang || "en");
+  if (!base) return res.status(404).json({ error: "Template no longer exists" });
+  const fields = safeParse(doc.fields_json, {});
+  const resolved = applyOverride(base, fields.override);
+  res.json({
+    id: doc.id, template_id: doc.template_id, lang: doc.lang,
+    signatory: doc.signatory, status: doc.status,
+    fields, base, resolved,
+    hasOverride: !!fields.override,
+  });
+});
+
 app.get("/api/documents", auth, (req, res) => {
   const rows = db.prepare(`
     SELECT d.*, g.name guest_name, g.villa, g.confirmation conf
@@ -582,9 +599,15 @@ app.get("/api/documents/:id/export", auth, async (req, res) => {
   const format = (req.query.format || "pdf").toLowerCase();
   const doc = db.prepare("SELECT * FROM documents WHERE id=?").get(req.params.id);
   if (!doc) return res.status(404).json({ error: "Not found" });
-  const template = getTemplate(doc.template_id, doc.lang || "en");
-  if (!template) return res.status(404).json({ error: "Template no longer exists" });
+  const baseTemplate = getTemplate(doc.template_id, doc.lang || "en");
+  if (!baseTemplate) return res.status(404).json({ error: "Template no longer exists" });
   const fields = safeParse(doc.fields_json, {});
+
+  // Per-document content overrides: when this guest's document has edited the
+  // letter text, those edits live in fields.override and replace the template's
+  // text for THIS document only (the shared template is untouched).
+  const template = applyOverride(baseTemplate, fields.override);
+
   const data = { ...fields, signatoryKey: doc.signatory, signatories: getSignatories() };
 
   const safe = (fields.name || "voucher").replace(/[^a-z0-9]+/gi, "_").slice(0, 40);
@@ -603,13 +626,25 @@ app.get("/api/documents/:id/export", auth, async (req, res) => {
   }
 });
 
+// Merge a per-document override object onto a template (non-destructive copy).
+function applyOverride(tpl, ov) {
+  if (!ov) return tpl;
+  const out = { ...tpl };
+  ["intro","lead","closing","contact","note","signoff","dateLabel"].forEach((k) => {
+    if (typeof ov[k] === "string") out[k] = ov[k];
+  });
+  if (Array.isArray(ov.body)) out.body = ov.body;
+  return out;
+}
+
 // Live preview (returns plain text rendering of the filled letter)
 app.post("/api/preview", auth, (req, res) => {
   const { template_id, fields, lang, template: inlineTpl } = req.body || {};
   // allow previewing an unsaved builder draft via inlineTpl
-  const t = inlineTpl || getTemplate(template_id, lang || "en");
+  let t = inlineTpl || getTemplate(template_id, lang || "en");
   if (!t) return res.status(400).json({ error: "Bad template" });
   const f = fields || {};
+  t = applyOverride(t, f.override);   // reflect per-document edits in the preview
   const sigs = getSignatories();
   const lines = [];
   if (t.topDate && f.date) lines.push(f.date);
