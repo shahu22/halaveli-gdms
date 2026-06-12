@@ -275,7 +275,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.3</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.4</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -1057,7 +1057,7 @@ async function runGridExport(mode,title,fmt){
   if(!people.length){return toast('No guests to export.');}
 
   // layout: 4 columns, 3:4 cells, label band beneath each
-  const cols=4, cellW=300, photoH=400, labelH=70, gapX=24, gapY=28, padX=50, padTop=110, padBottom=50;
+  const cols=4, cellW=300, photoH=400, labelH=70, gapX=24, gapY=28, padX=50, padTop=190, padBottom=50;
   const rows=Math.ceil(people.length/cols);
   const cellH=photoH+labelH;
   const W=padX*2+cols*cellW+(cols-1)*gapX;
@@ -1066,12 +1066,13 @@ async function runGridExport(mode,title,fmt){
   const ctx=cv.getContext('2d');
   ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
 
-  // header
-  ctx.fillStyle='#063e42';ctx.font='600 40px Georgia, serif';ctx.textAlign='left';
-  ctx.fillText('Constance Halaveli — '+title,padX,64);
+  // header (centered)
+  ctx.textAlign='center';
+  ctx.fillStyle='#063e42';ctx.font='600 44px Georgia, serif';
+  ctx.fillText('Constance Halaveli — '+title,W/2,74);
   const stamp=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-  ctx.fillStyle='#6f675a';ctx.font='400 20px Georgia, serif';
-  ctx.fillText(stamp+'  ·  '+people.length+' guests',padX,92);
+  ctx.fillStyle='#6f675a';ctx.font='400 22px Georgia, serif';
+  ctx.fillText(stamp+'  ·  '+people.length+' guests',W/2,108);
 
   for(let idx=0;idx<people.length;idx++){
     const p=people[idx];
@@ -1139,7 +1140,9 @@ function openCropper(img){
   cropState.min=coverScale;cropState.scale=coverScale;
   cropState.ox=0;cropState.oy=0;   // offset from centre now
   const zoom=document.getElementById('cropZoom');
-  zoom.min=coverScale.toFixed(3);zoom.max=(coverScale*4).toFixed(3);zoom.step=((coverScale*3)/100).toFixed(4);zoom.value=coverScale;
+  // allow zooming from slightly under "cover" up to 8x cover for fine framing
+  const lo=coverScale*0.6, hi=coverScale*8;
+  zoom.min=lo.toFixed(4);zoom.max=hi.toFixed(4);zoom.step=((hi-lo)/200).toFixed(5);zoom.value=coverScale;
   document.getElementById('cropBright').value=100;
   document.getElementById('cropAngle').value=0;
   document.getElementById('cropOverlay').classList.add('open');
@@ -1177,6 +1180,14 @@ function clampCrop(){ /* free panning allowed with rotation; no clamping */ }
   c.addEventListener('touchstart',e=>{const r=c.getBoundingClientRect();down(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);},{passive:true});
   c.addEventListener('touchmove',e=>{const r=c.getBoundingClientRect();move(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);e.preventDefault();},{passive:false});
   c.addEventListener('touchend',up);
+  c.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const zoom=document.getElementById('cropZoom');
+    const lo=parseFloat(zoom.min),hi=parseFloat(zoom.max);
+    let ns=cropState.scale*(e.deltaY<0?1.08:0.926);
+    ns=Math.max(lo,Math.min(hi,ns));
+    cropState.scale=ns;zoom.value=ns;drawCrop();
+  },{passive:false});
   document.getElementById('cropZoom').oninput=e=>{cropState.scale=parseFloat(e.target.value);drawCrop();};
   document.getElementById('cropBright').oninput=e=>{cropState.bright=parseInt(e.target.value);drawCrop();};
   document.getElementById('cropAngle').oninput=e=>{cropState.angle=parseInt(e.target.value);drawCrop();};
