@@ -222,6 +222,36 @@
   .chipbtn:hover{background:var(--sea);color:#fff}
   .insert-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   @media(max-width:900px){.tpl-editor-body{grid-template-columns:1fr}.tpl-preview-pane{display:none}}
+
+  /* ALBUM */
+  .album-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
+  .vgroup{grid-column:1/-1;font-family:'Cormorant Garamond',serif;font-size:19px;color:var(--sea-deep);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px;margin-top:8px}
+  .pcard{background:var(--white);border-radius:14px;overflow:hidden;box-shadow:var(--shadow);transition:transform .12s,box-shadow .15s;display:flex;flex-direction:column}
+  .pcard:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg)}
+  .pcard .ph{aspect-ratio:3/4;background:var(--sand-deep);position:relative;overflow:hidden;display:grid;place-items:center;cursor:pointer}
+  .pcard .ph img{width:100%;height:100%;object-fit:cover}
+  .pcard .ph .noimg{color:var(--ink-soft);font-size:34px;font-family:'Cormorant Garamond',serif}
+  .pcard .ph .lead-tag{position:absolute;top:7px;left:7px;background:var(--sea);color:#fff;font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:8px;text-transform:uppercase}
+  .pcard .meta{padding:9px 11px;cursor:pointer}
+  .pcard .meta .pn{font-weight:500;font-size:13px;line-height:1.25}
+  .pcard .meta .pv{font-size:11px;color:var(--ink-soft);margin-top:1px}
+  .pcard .addbtn{margin:0 11px 11px;font-size:11px;text-align:center;background:var(--sea-light);color:var(--sea-deep);border-radius:7px;padding:6px;font-weight:600;cursor:pointer}
+  .pcard .addbtn:hover{background:var(--sea);color:#fff}
+
+  /* CROP MODAL */
+  .crop-overlay{position:fixed;inset:0;background:rgba(15,25,25,.55);display:none;place-items:center;z-index:130;padding:20px}
+  .crop-overlay.open{display:grid}
+  .crop-box{background:var(--white);border-radius:18px;box-shadow:var(--shadow-lg);padding:22px;width:100%;max-width:420px}
+  .crop-head{font-family:'Cormorant Garamond',serif;font-size:21px;color:var(--sea-deep);margin-bottom:14px}
+  .crop-stage{width:300px;height:400px;margin:0 auto;border-radius:10px;overflow:hidden;background:#222;touch-action:none}
+  #cropCanvas{width:300px;height:400px;display:block;cursor:grab}
+  #cropCanvas:active{cursor:grabbing}
+  .crop-controls{margin:14px 0}
+  .crop-controls label{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+  .crop-controls input[type=range]{flex:1}
+  .crop-hint{font-size:11px;color:var(--ink-soft);text-align:center}
+  .crop-actions{display:flex;gap:8px;justify-content:flex-end}
+  .prof-photo{width:120px;aspect-ratio:3/4;border-radius:12px;object-fit:cover;background:var(--sand-deep);box-shadow:var(--shadow)}
 </style>
 </head>
 <body>
@@ -244,11 +274,12 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.1</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.2</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
       <button data-view="documents">Documents</button>
+      <button data-view="album">Album</button>
       <button data-view="templates" id="navTemplates">Templates</button>
       <button data-view="admin" id="navAdmin">Admin</button>
     </div>
@@ -318,6 +349,20 @@
       <div class="card" style="padding:8px 0"><div id="tplList"></div></div>
     </div>
 
+    <!-- ALBUM VIEW -->
+    <div id="view-album" class="hidden">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap">
+        <h2 style="font-size:26px;color:var(--sea-deep)">In-House Album</h2>
+        <span class="pill open" id="albumCount">0 guests</span>
+        <div style="flex:1"></div>
+        <input class="search" id="albumSearch" placeholder="Search name or villa…" style="max-width:280px">
+      </div>
+      <p style="color:var(--ink-soft);font-size:12.5px;margin:-2px 0 16px;max-width:680px;line-height:1.6">
+        Every in-house guest, by villa. Click <strong>Add Photo</strong> on a card to upload and crop a 3:4 portrait, or click a card to open the guest profile.
+      </p>
+      <div id="albumGrid" class="album-grid"></div>
+    </div>
+
     <!-- DOCUMENTS VIEW -->
     <div id="view-documents" class="hidden">
       <h2 style="font-size:26px;color:var(--sea-deep);margin-bottom:14px">All Generated Documents</h2>
@@ -340,6 +385,33 @@
       </p>
     </div>
   </div>
+</div>
+
+<!-- PHOTO CROP MODAL -->
+<div class="crop-overlay" id="cropOverlay">
+  <div class="crop-box">
+    <div class="crop-head">Adjust Photo — 3:4 portrait</div>
+    <div class="crop-stage" id="cropStage">
+      <canvas id="cropCanvas" width="360" height="480"></canvas>
+    </div>
+    <div class="crop-controls">
+      <label>Zoom <input type="range" id="cropZoom" min="1" max="4" step="0.01" value="1"></label>
+      <label>Brightness <input type="range" id="cropBright" min="50" max="150" step="1" value="100"></label>
+      <div class="crop-hint">Drag the image to reposition.</div>
+    </div>
+    <div class="crop-actions">
+      <button class="btn btn-ghost btn-sm" id="cropCancel">Cancel</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="cropSave">Save Photo</button>
+    </div>
+  </div>
+</div>
+
+<!-- GUEST PROFILE PANEL -->
+<div class="overlay" id="profOverlay"></div>
+<div class="panel" id="profPanel">
+  <div class="panel-head"><button class="x" id="profClose">✕</button>
+    <div class="villa" id="profName">Guest</div><div class="sub" id="profSub"></div></div>
+  <div class="panel-body" id="profBody"></div>
 </div>
 
 <!-- DOCUMENT EDITOR (full overlay) -->
@@ -914,11 +986,203 @@ async function exportFromEditor(fmt){
 document.getElementById('docExportWord').onclick=()=>exportFromEditor('docx');
 document.getElementById('docExportPdf').onclick=()=>exportFromEditor('pdf');
 
+/* ---------- ALBUM ---------- */
+let albumPeople=[];
+async function loadAlbum(){
+  albumPeople=await api.get('/api/album');
+  renderAlbum();
+}
+function renderAlbum(){
+  const q=(document.getElementById('albumSearch').value||'').toLowerCase();
+  const people=albumPeople.filter(p=>!q||(p.displayName+' '+p.villa).toLowerCase().includes(q));
+  document.getElementById('albumCount').textContent=`${people.length} guest${people.length===1?'':'s'}`;
+  const grid=document.getElementById('albumGrid');
+  if(!people.length){grid.innerHTML='<div class="empty" style="grid-column:1/-1">No in-house guests yet. Check in arrivals to populate the album.</div>';return;}
+  // group by villa
+  const byVilla={};people.forEach(p=>{(byVilla[p.villa]=byVilla[p.villa]||[]).push(p);});
+  const villaKeys=Object.keys(byVilla).sort((a,b)=>(parseInt(a)||0)-(parseInt(b)||0));
+  let html='';
+  villaKeys.forEach(vk=>{
+    html+=`<div class="vgroup">Villa ${esc(vk)}</div>`;
+    byVilla[vk].forEach(p=>{
+      const key=`${p.guest_id}:${p.person_index}`;
+      html+=`<div class="pcard">
+        <div class="ph" data-prof="${key}">
+          ${p.isLead?'<span class="lead-tag">Main</span>':''}
+          ${p.photo?`<img src="${p.photo}" alt="">`:`<span class="noimg">${esc((p.displayName[0]||'?').toUpperCase())}</span>`}
+        </div>
+        <div class="meta" data-prof="${key}">
+          <div class="pn">${esc(p.displayName)}</div>
+          <div class="pv">${p.isLead?'Main guest':esc(p.role==='child'?'Child':'Guest')}</div>
+        </div>
+        <div class="addbtn" data-add="${key}">${p.photo?'Change Photo':'＋ Add Photo'}</div>
+      </div>`;
+    });
+  });
+  grid.innerHTML=html;
+  grid.querySelectorAll('[data-add]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();startPhotoUpload(b.dataset.add);});
+  grid.querySelectorAll('[data-prof]').forEach(b=>b.onclick=()=>openProfile(b.dataset.prof));
+}
+document.getElementById('albumSearch').oninput=renderAlbum;
+
+/* ---------- PHOTO UPLOAD + CROP ---------- */
+let cropState={img:null,scale:1,min:1,bright:100,ox:0,oy:0,dragging:false,lastX:0,lastY:0,targetKey:null};
+const CROP_W=300, CROP_H=400, OUT_W=600, OUT_H=800;   // 3:4
+
+function startPhotoUpload(key){
+  cropState.targetKey=key;
+  const inp=document.createElement('input');inp.type='file';inp.accept='image/*';
+  inp.onchange=()=>{
+    const file=inp.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{openCropper(img);};
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  inp.click();
+}
+
+function openCropper(img){
+  cropState.img=img;cropState.bright=100;
+  // fit image to cover the 3:4 frame
+  const coverScale=Math.max(CROP_W/img.width, CROP_H/img.height);
+  cropState.min=coverScale;cropState.scale=coverScale;
+  cropState.ox=(CROP_W-img.width*coverScale)/2;
+  cropState.oy=(CROP_H-img.height*coverScale)/2;
+  const zoom=document.getElementById('cropZoom');
+  zoom.min=coverScale.toFixed(3);zoom.max=(coverScale*4).toFixed(3);zoom.step=((coverScale*3)/100).toFixed(4);zoom.value=coverScale;
+  document.getElementById('cropBright').value=100;
+  document.getElementById('cropOverlay').classList.add('open');
+  drawCrop();
+}
+function drawCrop(){
+  const c=document.getElementById('cropCanvas');const ctx=c.getContext('2d');
+  c.width=CROP_W;c.height=CROP_H;
+  ctx.clearRect(0,0,CROP_W,CROP_H);
+  ctx.filter=`brightness(${cropState.bright}%)`;
+  const i=cropState.img;
+  ctx.drawImage(i,cropState.ox,cropState.oy,i.width*cropState.scale,i.height*cropState.scale);
+  ctx.filter='none';
+}
+function clampCrop(){
+  const i=cropState.img;const w=i.width*cropState.scale,h=i.height*cropState.scale;
+  if(cropState.ox>0)cropState.ox=0;if(cropState.oy>0)cropState.oy=0;
+  if(cropState.ox<CROP_W-w)cropState.ox=CROP_W-w;if(cropState.oy<CROP_H-h)cropState.oy=CROP_H-h;
+}
+(function bindCrop(){
+  const c=document.getElementById('cropCanvas');
+  const down=(x,y)=>{cropState.dragging=true;cropState.lastX=x;cropState.lastY=y;};
+  const move=(x,y)=>{if(!cropState.dragging)return;cropState.ox+=(x-cropState.lastX);cropState.oy+=(y-cropState.lastY);cropState.lastX=x;cropState.lastY=y;clampCrop();drawCrop();};
+  const up=()=>{cropState.dragging=false;};
+  c.addEventListener('mousedown',e=>down(e.offsetX,e.offsetY));
+  window.addEventListener('mousemove',e=>{if(cropState.dragging){const r=c.getBoundingClientRect();move(e.clientX-r.left,e.clientY-r.top);}});
+  window.addEventListener('mouseup',up);
+  c.addEventListener('touchstart',e=>{const r=c.getBoundingClientRect();down(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);},{passive:true});
+  c.addEventListener('touchmove',e=>{const r=c.getBoundingClientRect();move(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);e.preventDefault();},{passive:false});
+  c.addEventListener('touchend',up);
+  document.getElementById('cropZoom').oninput=e=>{
+    const ns=parseFloat(e.target.value);
+    // zoom around centre
+    const cx=CROP_W/2,cy=CROP_H/2;
+    cropState.ox=cx-(cx-cropState.ox)*(ns/cropState.scale);
+    cropState.oy=cy-(cy-cropState.oy)*(ns/cropState.scale);
+    cropState.scale=ns;clampCrop();drawCrop();
+  };
+  document.getElementById('cropBright').oninput=e=>{cropState.bright=parseInt(e.target.value);drawCrop();};
+})();
+document.getElementById('cropCancel').onclick=()=>document.getElementById('cropOverlay').classList.remove('open');
+document.getElementById('cropSave').onclick=async()=>{
+  // render at output resolution (2x) for quality
+  const out=document.createElement('canvas');out.width=OUT_W;out.height=OUT_H;
+  const ctx=out.getContext('2d');const k=OUT_W/CROP_W;
+  ctx.filter=`brightness(${cropState.bright}%)`;
+  const i=cropState.img;
+  ctx.drawImage(i,cropState.ox*k,cropState.oy*k,i.width*cropState.scale*k,i.height*cropState.scale*k);
+  const dataUrl=out.toDataURL('image/jpeg',0.85);
+  const [gid,pidx]=cropState.targetKey.split(':');
+  try{await api.put('/api/album/'+gid+'/'+pidx,{photo:dataUrl});
+    document.getElementById('cropOverlay').classList.remove('open');
+    toast('Photo saved');await loadAlbum();
+  }catch(e){toast('Save failed: '+e.message);}
+};
+
+/* ---------- GUEST PROFILE ---------- */
+let profData=null;
+async function openProfile(key){
+  const [gid,pidx]=key.split(':');
+  profData=await api.get('/api/album/'+gid+'/'+pidx);
+  document.getElementById('profName').textContent=profData.displayName;
+  document.getElementById('profSub').textContent=`Villa ${profData.villa||'—'} · ${profData.isLead?'Main guest':(profData.role==='child'?'Child':'Guest')}`;
+  renderProfile();
+  document.getElementById('profOverlay').classList.add('open');
+  document.getElementById('profPanel').classList.add('open');
+}
+function closeProfile(){document.getElementById('profOverlay').classList.remove('open');document.getElementById('profPanel').classList.remove('open');}
+document.getElementById('profClose').onclick=closeProfile;
+document.getElementById('profOverlay').onclick=closeProfile;
+
+function renderProfile(){
+  const p=profData;
+  document.getElementById('profBody').innerHTML=`
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:18px">
+      <div style="position:relative">
+        ${p.photo?`<img src="${p.photo}" class="prof-photo">`:`<div class="prof-photo" style="display:grid;place-items:center;font-size:40px;color:var(--ink-soft);font-family:'Cormorant Garamond',serif">${esc((p.displayName[0]||'?').toUpperCase())}</div>`}
+      </div>
+      <div style="flex:1">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          ${p.hm?'<span class="badge fb">♡ Honeymoon</span>':''}
+          ${p.anniversary?'<span class="badge hb">⚭ Anniversary</span>':''}
+          ${p.repeater?`<span class="badge aip">★ ${esc(p.repeater_count||'Repeater')}</span>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--ink-soft);line-height:1.7">
+          <div>Booking: ${esc(p.bookingName||'')}</div>
+          <div>Arrival: ${esc(p.arrival||'—')} · Departure: ${esc(p.departure||'—')}</div>
+          <div>Meal plan: ${esc(p.meal_plan||'—')}</div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" id="profChangePhoto">${p.photo?'Change Photo':'Add Photo'}</button>
+          ${p.photo?'<button class="btn btn-ghost btn-sm" id="profDelPhoto">Remove</button>':''}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Preferences</div>
+    <div class="field"><label>Allergies</label><textarea id="pf_allergies" rows="2">${esc(p.allergies||'')}</textarea></div>
+    <div class="field"><label>Likes / Preferences</label><textarea id="pf_likes" rows="2">${esc(p.likes||'')}</textarea></div>
+    <div class="field"><label>Occasions (birthday, anniversary…)</label><textarea id="pf_occasions" rows="2">${esc(p.occasions||'')}</textarea></div>
+
+    <div class="section-title">Comments</div>
+    <div class="field"><textarea id="pf_comments" rows="3" placeholder="General notes about this guest…">${esc(p.comments||'')}</textarea></div>
+
+    <div class="section-title">History — this stay</div>
+    <div class="field"><textarea id="pf_history" rows="4" placeholder="Log of what happened during the stay…">${esc(p.history||'')}</textarea></div>
+
+    <button class="btn btn-primary btn-sm" style="width:auto" id="profSave">Save Profile</button>
+  `;
+  // textareas use the field input styling
+  document.getElementById('profBody').querySelectorAll('textarea').forEach(t=>{t.style.width='100%';t.style.border='1px solid var(--line)';t.style.borderRadius='9px';t.style.padding='9px 11px';t.style.fontFamily='Jost';t.style.fontSize='13px';t.style.resize='vertical';});
+  const cp=document.getElementById('profChangePhoto');if(cp)cp.onclick=()=>startPhotoUpload(`${p.guest_id}:${p.person_index}`);
+  const dp=document.getElementById('profDelPhoto');if(dp)dp.onclick=async()=>{
+    if(!confirm('Remove this photo?'))return;
+    await api.del('/api/album/'+p.guest_id+'/'+p.person_index+'/photo');toast('Photo removed');
+    profData.photo=null;renderProfile();loadAlbum();
+  };
+  document.getElementById('profSave').onclick=async()=>{
+    const patch={allergies:val('pf_allergies'),likes:val('pf_likes'),occasions:val('pf_occasions'),comments:val('pf_comments'),history:val('pf_history')};
+    await api.put('/api/album/'+p.guest_id+'/'+p.person_index,patch);
+    Object.assign(profData,patch);toast('Profile saved');
+  };
+  function val(id){return document.getElementById(id).value;}
+}
+
 /* ---------- VIEWS ---------- */
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-  const v=b.dataset.view;['guests','documents','templates','admin'].forEach(x=>document.getElementById('view-'+x).classList.toggle('hidden',x!==v));
-  if(v==='documents')loadDocuments();if(v==='admin')loadUsers();if(v==='templates')loadTemplateList();
+  const v=b.dataset.view;['guests','documents','album','templates','admin'].forEach(x=>document.getElementById('view-'+x).classList.toggle('hidden',x!==v));
+  if(v==='documents')loadDocuments();if(v==='admin')loadUsers();if(v==='templates')loadTemplateList();if(v==='album')loadAlbum();
 });
 async function loadDocuments(){
   const docs=await api.get('/api/documents');
