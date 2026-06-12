@@ -253,6 +253,7 @@
   .crop-actions{display:flex;gap:8px;justify-content:flex-end}
   .prof-photo{width:120px;aspect-ratio:3/4;border-radius:12px;object-fit:cover;background:var(--sand-deep);box-shadow:var(--shadow)}
 </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
 
@@ -274,7 +275,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.2</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.3</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -315,6 +316,7 @@
 
       <div class="toolbar">
         <input class="search" id="search" placeholder="Search name, villa, confirmation…">
+        <button class="btn btn-ghost btn-sm hidden" id="exportDepPics">⬇ Export Departure Pictures</button>
         <div class="seg" id="listSeg">
           <button data-lt="arrival" class="on">Arrivals</button>
           <button data-lt="inhouse">In-House</button>
@@ -355,7 +357,8 @@
         <h2 style="font-size:26px;color:var(--sea-deep)">In-House Album</h2>
         <span class="pill open" id="albumCount">0 guests</span>
         <div style="flex:1"></div>
-        <input class="search" id="albumSearch" placeholder="Search name or villa…" style="max-width:280px">
+        <button class="btn btn-ghost btn-sm" id="albumExport">⬇ Export All</button>
+        <input class="search" id="albumSearch" placeholder="Search name or villa…" style="max-width:240px">
       </div>
       <p style="color:var(--ink-soft);font-size:12.5px;margin:-2px 0 16px;max-width:680px;line-height:1.6">
         Every in-house guest, by villa. Click <strong>Add Photo</strong> on a card to upload and crop a 3:4 portrait, or click a card to open the guest profile.
@@ -397,6 +400,11 @@
     <div class="crop-controls">
       <label>Zoom <input type="range" id="cropZoom" min="1" max="4" step="0.01" value="1"></label>
       <label>Brightness <input type="range" id="cropBright" min="50" max="150" step="1" value="100"></label>
+      <label>Angle <input type="range" id="cropAngle" min="-45" max="45" step="1" value="0"></label>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:4px">
+        <button class="btn btn-ghost btn-sm" id="cropRotL">⟲ 90° Left</button>
+        <button class="btn btn-ghost btn-sm" id="cropRotR">90° Right ⟳</button>
+      </div>
       <div class="crop-hint">Drag the image to reposition.</div>
     </div>
     <div class="crop-actions">
@@ -586,7 +594,7 @@ document.getElementById('newBookingBtn').onclick=()=>openModal(`
 
 /* ---------- GUEST LIST ---------- */
 function syncListSeg(){document.querySelectorAll('#listSeg button').forEach(b=>b.classList.toggle('on',b.dataset.lt===state.listType));}
-document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();await loadGuests();});
+document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();document.getElementById('exportDepPics').classList.toggle('hidden',state.listType!=='departure');await loadGuests();});
 document.getElementById('search').oninput=(e)=>{state.search=e.target.value;renderGuests();};
 
 async function loadGuests(){
@@ -1024,9 +1032,89 @@ function renderAlbum(){
   grid.querySelectorAll('[data-prof]').forEach(b=>b.onclick=()=>openProfile(b.dataset.prof));
 }
 document.getElementById('albumSearch').oninput=renderAlbum;
+document.getElementById('albumExport').onclick=()=>chooseExport('inhouse','In-House Album');
+document.getElementById('exportDepPics').onclick=()=>chooseExport('departure-tomorrow','Departures Tomorrow');
+
+/* ---------- GRID EXPORT (PNG / PDF) ---------- */
+function chooseExport(mode,title){
+  openModal(`<h3>Export ${esc(title)}</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Choose a format. Each photo is labelled with room number and full name.</p>
+    <div class="row" style="justify-content:center">
+      <button class="btn btn-coral btn-sm" style="width:auto" id="exPdf">⬇ PDF</button>
+      <button class="btn btn-gold btn-sm" style="width:auto" id="exPng">⬇ PNG</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+    </div>`,()=>{
+      document.getElementById('exPdf').onclick=()=>{closeModal();runGridExport(mode,title,'pdf');};
+      document.getElementById('exPng').onclick=()=>{closeModal();runGridExport(mode,title,'png');};
+    });
+}
+
+function loadImg(src){return new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src;});}
+
+async function runGridExport(mode,title,fmt){
+  toast('Preparing export…');
+  let people=await api.get('/api/album-export?mode='+mode+'&dayId='+state.dayId);
+  if(!people.length){return toast('No guests to export.');}
+
+  // layout: 4 columns, 3:4 cells, label band beneath each
+  const cols=4, cellW=300, photoH=400, labelH=70, gapX=24, gapY=28, padX=50, padTop=110, padBottom=50;
+  const rows=Math.ceil(people.length/cols);
+  const cellH=photoH+labelH;
+  const W=padX*2+cols*cellW+(cols-1)*gapX;
+  const H=padTop+rows*cellH+(rows-1)*gapY+padBottom;
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  // header
+  ctx.fillStyle='#063e42';ctx.font='600 40px Georgia, serif';ctx.textAlign='left';
+  ctx.fillText('Constance Halaveli — '+title,padX,64);
+  const stamp=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  ctx.fillStyle='#6f675a';ctx.font='400 20px Georgia, serif';
+  ctx.fillText(stamp+'  ·  '+people.length+' guests',padX,92);
+
+  for(let idx=0;idx<people.length;idx++){
+    const p=people[idx];
+    const r=Math.floor(idx/cols), c=idx%cols;
+    const x=padX+c*(cellW+gapX);
+    const y=padTop+r*(cellH+gapY);
+    // photo
+    ctx.fillStyle='#ece2cf';ctx.fillRect(x,y,cellW,photoH);
+    if(p.photo){const im=await loadImg(p.photo);if(im){
+      // cover-fit into cell
+      const s=Math.max(cellW/im.width,photoH/im.height);
+      const dw=im.width*s,dh=im.height*s;
+      ctx.save();ctx.beginPath();ctx.rect(x,y,cellW,photoH);ctx.clip();
+      ctx.drawImage(im,x+(cellW-dw)/2,y+(photoH-dh)/2,dw,dh);ctx.restore();
+    }} else {
+      ctx.fillStyle='#b8ab92';ctx.font='600 90px Georgia, serif';ctx.textAlign='center';
+      ctx.fillText((p.displayName[0]||'?').toUpperCase(),x+cellW/2,y+photoH/2+30);
+    }
+    // label band
+    ctx.fillStyle='#0a5e63';ctx.fillRect(x,y+photoH,cellW,labelH);
+    ctx.fillStyle='#ffffff';ctx.textAlign='center';
+    ctx.font='700 26px Georgia, serif';
+    ctx.fillText('Villa '+(p.villa||'—'),x+cellW/2,y+photoH+30);
+    ctx.font='400 20px Georgia, serif';
+    let nm=p.displayName;if(nm.length>26)nm=nm.slice(0,25)+'…';
+    ctx.fillText(nm,x+cellW/2,y+photoH+56);
+  }
+
+  const fname=('halaveli_'+title.toLowerCase().replace(/[^a-z0-9]+/g,'_')+'_'+stamp.replace(/ /g,'')).replace(/_+/g,'_');
+  if(fmt==='png'){
+    const a=document.createElement('a');a.href=cv.toDataURL('image/png');a.download=fname+'.png';a.click();
+    toast('PNG exported');
+  } else {
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({orientation:W>H?'landscape':'portrait',unit:'pt',format:[W,H]});
+    pdf.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG',0,0,W,H);
+    pdf.save(fname+'.pdf');
+    toast('PDF exported');
+  }
+}
 
 /* ---------- PHOTO UPLOAD + CROP ---------- */
-let cropState={img:null,scale:1,min:1,bright:100,ox:0,oy:0,dragging:false,lastX:0,lastY:0,targetKey:null};
+let cropState={img:null,scale:1,min:1,bright:100,angle:0,quarter:0,ox:0,oy:0,dragging:false,lastX:0,lastY:0,targetKey:null};
 const CROP_W=300, CROP_H=400, OUT_W=600, OUT_H=800;   // 3:4
 
 function startPhotoUpload(key){
@@ -1046,36 +1134,42 @@ function startPhotoUpload(key){
 }
 
 function openCropper(img){
-  cropState.img=img;cropState.bright=100;
-  // fit image to cover the 3:4 frame
+  cropState.img=img;cropState.bright=100;cropState.angle=0;cropState.quarter=0;
   const coverScale=Math.max(CROP_W/img.width, CROP_H/img.height);
   cropState.min=coverScale;cropState.scale=coverScale;
-  cropState.ox=(CROP_W-img.width*coverScale)/2;
-  cropState.oy=(CROP_H-img.height*coverScale)/2;
+  cropState.ox=0;cropState.oy=0;   // offset from centre now
   const zoom=document.getElementById('cropZoom');
   zoom.min=coverScale.toFixed(3);zoom.max=(coverScale*4).toFixed(3);zoom.step=((coverScale*3)/100).toFixed(4);zoom.value=coverScale;
   document.getElementById('cropBright').value=100;
+  document.getElementById('cropAngle').value=0;
   document.getElementById('cropOverlay').classList.add('open');
   drawCrop();
+}
+
+// Draw the image centre-anchored with rotation (quarter turns + fine angle),
+// scale, brightness and pan offset, into a target context at the given scale k.
+function paintImage(ctx,k){
+  const i=cropState.img;
+  const totalAngle=(cropState.quarter*90+cropState.angle)*Math.PI/180;
+  ctx.save();
+  ctx.filter=`brightness(${cropState.bright}%)`;
+  ctx.translate((CROP_W/2+cropState.ox)*k,(CROP_H/2+cropState.oy)*k);
+  ctx.rotate(totalAngle);
+  ctx.scale(cropState.scale*k,cropState.scale*k);
+  ctx.drawImage(i,-i.width/2,-i.height/2);
+  ctx.restore();
 }
 function drawCrop(){
   const c=document.getElementById('cropCanvas');const ctx=c.getContext('2d');
   c.width=CROP_W;c.height=CROP_H;
   ctx.clearRect(0,0,CROP_W,CROP_H);
-  ctx.filter=`brightness(${cropState.bright}%)`;
-  const i=cropState.img;
-  ctx.drawImage(i,cropState.ox,cropState.oy,i.width*cropState.scale,i.height*cropState.scale);
-  ctx.filter='none';
+  paintImage(ctx,1);
 }
-function clampCrop(){
-  const i=cropState.img;const w=i.width*cropState.scale,h=i.height*cropState.scale;
-  if(cropState.ox>0)cropState.ox=0;if(cropState.oy>0)cropState.oy=0;
-  if(cropState.ox<CROP_W-w)cropState.ox=CROP_W-w;if(cropState.oy<CROP_H-h)cropState.oy=CROP_H-h;
-}
+function clampCrop(){ /* free panning allowed with rotation; no clamping */ }
 (function bindCrop(){
   const c=document.getElementById('cropCanvas');
   const down=(x,y)=>{cropState.dragging=true;cropState.lastX=x;cropState.lastY=y;};
-  const move=(x,y)=>{if(!cropState.dragging)return;cropState.ox+=(x-cropState.lastX);cropState.oy+=(y-cropState.lastY);cropState.lastX=x;cropState.lastY=y;clampCrop();drawCrop();};
+  const move=(x,y)=>{if(!cropState.dragging)return;cropState.ox+=(x-cropState.lastX);cropState.oy+=(y-cropState.lastY);cropState.lastX=x;cropState.lastY=y;drawCrop();};
   const up=()=>{cropState.dragging=false;};
   c.addEventListener('mousedown',e=>down(e.offsetX,e.offsetY));
   window.addEventListener('mousemove',e=>{if(cropState.dragging){const r=c.getBoundingClientRect();move(e.clientX-r.left,e.clientY-r.top);}});
@@ -1083,24 +1177,18 @@ function clampCrop(){
   c.addEventListener('touchstart',e=>{const r=c.getBoundingClientRect();down(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);},{passive:true});
   c.addEventListener('touchmove',e=>{const r=c.getBoundingClientRect();move(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);e.preventDefault();},{passive:false});
   c.addEventListener('touchend',up);
-  document.getElementById('cropZoom').oninput=e=>{
-    const ns=parseFloat(e.target.value);
-    // zoom around centre
-    const cx=CROP_W/2,cy=CROP_H/2;
-    cropState.ox=cx-(cx-cropState.ox)*(ns/cropState.scale);
-    cropState.oy=cy-(cy-cropState.oy)*(ns/cropState.scale);
-    cropState.scale=ns;clampCrop();drawCrop();
-  };
+  document.getElementById('cropZoom').oninput=e=>{cropState.scale=parseFloat(e.target.value);drawCrop();};
   document.getElementById('cropBright').oninput=e=>{cropState.bright=parseInt(e.target.value);drawCrop();};
+  document.getElementById('cropAngle').oninput=e=>{cropState.angle=parseInt(e.target.value);drawCrop();};
+  document.getElementById('cropRotL').onclick=()=>{cropState.quarter=(cropState.quarter+3)%4;drawCrop();};
+  document.getElementById('cropRotR').onclick=()=>{cropState.quarter=(cropState.quarter+1)%4;drawCrop();};
 })();
 document.getElementById('cropCancel').onclick=()=>document.getElementById('cropOverlay').classList.remove('open');
 document.getElementById('cropSave').onclick=async()=>{
-  // render at output resolution (2x) for quality
   const out=document.createElement('canvas');out.width=OUT_W;out.height=OUT_H;
-  const ctx=out.getContext('2d');const k=OUT_W/CROP_W;
-  ctx.filter=`brightness(${cropState.bright}%)`;
-  const i=cropState.img;
-  ctx.drawImage(i,cropState.ox*k,cropState.oy*k,i.width*cropState.scale*k,i.height*cropState.scale*k);
+  const ctx=out.getContext('2d');
+  ctx.fillStyle='#222';ctx.fillRect(0,0,OUT_W,OUT_H);
+  paintImage(ctx,OUT_W/CROP_W);
   const dataUrl=out.toDataURL('image/jpeg',0.85);
   const [gid,pidx]=cropState.targetKey.split(':');
   try{await api.put('/api/album/'+gid+'/'+pidx,{photo:dataUrl});
