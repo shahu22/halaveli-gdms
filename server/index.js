@@ -522,6 +522,103 @@ app.post("/api/guests", auth, adminOnly, (req, res) => {
   res.json({ id: info.lastInsertRowid });
 });
 
+// ============================================================================
+//  ALBUM  (in-house guests as individual people with photos + profiles)
+// ============================================================================
+// Returns one entry PER PERSON across all in-house bookings, ordered by villa
+// then person index (lead first), each merged with its profile row.
+app.get("/api/album", auth, (req, res) => {
+  const bookings = db.prepare(
+    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
+  ).all();
+  const profiles = db.prepare("SELECT * FROM guest_profiles").all();
+  const pIndex = {};
+  profiles.forEach((p) => { pIndex[`${p.guest_id}:${p.person_index}`] = p; });
+
+  const people = [];
+  for (const b of bookings) {
+    const list = safeParse(b.guests_json, []);
+    list.forEach((person, i) => {
+      const prof = pIndex[`${b.id}:${i}`] || {};
+      const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
+        || person.last || person.first || `Guest ${i + 1}`;
+      people.push({
+        guest_id: b.id, person_index: i,
+        villa: b.villa, villa_type: b.villa_type,
+        displayName: display, role: person.role || "adult",
+        isLead: i === 0,
+        arrival: b.arrival, departure: b.departure,
+        bookingName: b.name,
+        photo: prof.photo || null,
+        hasProfile: !!(prof.allergies || prof.likes || prof.occasions || prof.comments || prof.history),
+      });
+    });
+  }
+  res.json(people);
+});
+
+// Get one person's full profile (incl. photo)
+app.get("/api/album/:guestId/:personIndex", auth, (req, res) => {
+  const { guestId, personIndex } = req.params;
+  const booking = db.prepare("SELECT * FROM guests WHERE id=?").get(guestId);
+  if (!booking) return res.status(404).json({ error: "Booking not found" });
+  const list = safeParse(booking.guests_json, []);
+  const person = list[personIndex] || {};
+  const prof = db.prepare("SELECT * FROM guest_profiles WHERE guest_id=? AND person_index=?")
+    .get(guestId, personIndex) || {};
+  const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
+    || person.last || person.first || `Guest ${Number(personIndex) + 1}`;
+  res.json({
+    guest_id: Number(guestId), person_index: Number(personIndex),
+    displayName: display, role: person.role || "adult", isLead: Number(personIndex) === 0,
+    villa: booking.villa, villa_type: booking.villa_type,
+    arrival: booking.arrival, departure: booking.departure,
+    bookingName: booking.name, meal_plan: booking.meal_plan,
+    hm: !!booking.hm, anniversary: !!booking.anniversary, repeater: !!booking.repeater,
+    repeater_count: booking.repeater_count,
+    photo: prof.photo || null,
+    allergies: prof.allergies || "", likes: prof.likes || "",
+    occasions: prof.occasions || "", comments: prof.comments || "",
+    history: prof.history || "",
+  });
+});
+
+// Upsert a person's profile fields and/or photo
+function upsertProfile(guestId, personIndex, patch) {
+  const existing = db.prepare("SELECT id FROM guest_profiles WHERE guest_id=? AND person_index=?")
+    .get(guestId, personIndex);
+  const fields = ["photo","allergies","likes","occasions","comments","history"];
+  if (existing) {
+    const sets = [], vals = [];
+    fields.forEach((f) => { if (f in patch) { sets.push(`${f}=?`); vals.push(patch[f]); } });
+    if (!sets.length) return;
+    sets.push("updated_at=datetime('now')");
+    vals.push(guestId, personIndex);
+    db.prepare(`UPDATE guest_profiles SET ${sets.join(",")} WHERE guest_id=? AND person_index=?`).run(...vals);
+  } else {
+    db.prepare(`INSERT INTO guest_profiles
+      (guest_id,person_index,photo,allergies,likes,occasions,comments,history)
+      VALUES (?,?,?,?,?,?,?,?)`).run(
+      guestId, personIndex, patch.photo || null, patch.allergies || "", patch.likes || "",
+      patch.occasions || "", patch.comments || "", patch.history || "");
+  }
+}
+
+app.put("/api/album/:guestId/:personIndex", auth, (req, res) => {
+  const { guestId, personIndex } = req.params;
+  const allowed = {};
+  ["photo","allergies","likes","occasions","comments","history"].forEach((f) => {
+    if (f in req.body) allowed[f] = req.body[f];
+  });
+  upsertProfile(Number(guestId), Number(personIndex), allowed);
+  res.json({ ok: true });
+});
+
+app.delete("/api/album/:guestId/:personIndex/photo", auth, (req, res) => {
+  upsertProfile(Number(req.params.guestId), Number(req.params.personIndex), { photo: null });
+  res.json({ ok: true });
+});
+
 function hydrateGuest(g) {
   return {
     ...g,
