@@ -546,6 +546,7 @@ app.get("/api/album", auth, (req, res) => {
         guest_id: b.id, person_index: i,
         villa: b.villa, villa_type: b.villa_type,
         displayName: display, role: person.role || "adult",
+        title: person.title || "", first: person.first || "", last: person.last || "",
         isLead: i === 0,
         arrival: b.arrival, departure: b.departure,
         bookingName: b.name,
@@ -571,6 +572,7 @@ app.get("/api/album/:guestId/:personIndex", auth, (req, res) => {
   res.json({
     guest_id: Number(guestId), person_index: Number(personIndex),
     displayName: display, role: person.role || "adult", isLead: Number(personIndex) === 0,
+    title: person.title || "", first: person.first || "", last: person.last || "",
     villa: booking.villa, villa_type: booking.villa_type,
     arrival: booking.arrival, departure: booking.departure,
     bookingName: booking.name, meal_plan: booking.meal_plan,
@@ -624,16 +626,17 @@ app.get("/api/album-export", auth, (req, res) => {
   const mode = req.query.mode || "inhouse";
   const dayId = req.query.dayId;
   let bookings;
+  const allInhouse = () => db.prepare(
+    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
+  ).all();
   if (mode === "departure-tomorrow") {
+    const tmr = addDays(refDateForDay(dayId), 1);
+    bookings = allInhouse().filter((b) => toISO(b.departure) === tmr);
+  } else if (mode === "departure-today") {
     const ref = refDateForDay(dayId);
-    const tmr = addDays(ref, 1);
-    bookings = db.prepare(
-      "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
-    ).all().filter((b) => toISO(b.departure) === tmr);
+    bookings = allInhouse().filter((b) => toISO(b.departure) === ref);
   } else {
-    bookings = db.prepare(
-      "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
-    ).all();
+    bookings = allInhouse();
   }
   const profiles = db.prepare("SELECT * FROM guest_profiles").all();
   const pIndex = {};
@@ -648,6 +651,7 @@ app.get("/api/album-export", auth, (req, res) => {
         || person.last || person.first || `Guest ${i + 1}`;
       people.push({
         villa: b.villa, displayName: display, isLead: i === 0,
+        title: person.title || "", first: person.first || "", last: person.last || "",
         departure: b.departure, photo: prof.photo || null,
       });
     });
