@@ -44,17 +44,45 @@ function inlineRuns(line, baseOpts = {}) {
 }
 
 function para(line, opts = {}) {
-  let { align = AlignmentType.CENTER, spacingAfter = 200, bold, size = 22 } = opts;
-  // For RTL languages, flip default centre stays centre but left/right swap.
+  let { align = AlignmentType.CENTER, spacingAfter = 200, bold, size = 22,
+        indentLeft, lineSpacing = 276, spacingBefore } = opts;
   if (RENDER.rtl) {
     if (align === AlignmentType.LEFT) align = AlignmentType.RIGHT;
     else if (align === AlignmentType.RIGHT) align = AlignmentType.LEFT;
   }
-  return new Paragraph({
+  const spacing = { after: spacingAfter, line: lineSpacing };
+  if (spacingBefore != null) spacing.before = spacingBefore;
+  const p = {
     alignment: align,
     bidirectional: RENDER.rtl || undefined,
-    spacing: { after: spacingAfter, line: 276 },
+    spacing,
     children: inlineRuns(line, { size, ...(bold ? { bold: true } : {}) }),
+  };
+  if (indentLeft != null) p.indent = { left: indentLeft };
+  return new Paragraph(p);
+}
+
+// A bullet line where the label (before the first colon) is bold and the value
+// after it is regular — e.g. "Luggage collection:  09:30 hrs – Halaveli time".
+function bulletDetail(text, opts = {}) {
+  const indentLeft = opts.indentLeft != null ? opts.indentLeft : 1000;
+  const size = opts.size || 22;
+  const clean = text.replace(/^•\s*/, "");
+  const ci = clean.indexOf(":");
+  const fontOpt = RENDER.font ? { font: RENDER.font } : {};
+  const runs = [new TextRun({ text: "•  ", size, ...fontOpt })];
+  if (ci > -1) {
+    runs.push(new TextRun({ text: clean.slice(0, ci + 1), bold: true, size, ...fontOpt }));
+    runs.push(new TextRun({ text: clean.slice(ci + 1), size, ...fontOpt }));
+  } else {
+    runs.push(new TextRun({ text: clean, size, ...fontOpt }));
+  }
+  return new Paragraph({
+    alignment: RENDER.rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+    bidirectional: RENDER.rtl || undefined,
+    indent: { left: indentLeft, hanging: 200 },
+    spacing: { after: 150, line: 276 },
+    children: runs,
   });
 }
 
@@ -73,15 +101,20 @@ function buildDocChildren(template, data) {
   // Default alignment for this document (vouchers center; letters left-align)
   const baseAlign = template.align === "left" ? AlignmentType.LEFT : AlignmentType.CENTER;
 
+  // Top space for a printed letterhead logo (letters only).
+  if (template.letterheadSpace) {
+    children.push(blank(template.letterheadSpace));
+  }
+
   // Optional top date. topDateText is an exact pre-formatted string (departure
   // letters); otherwise fall back to data.date (certificates).
   const topDateStr = template.topDateText || (template.topDate ? data.date : "");
   if (topDateStr) {
-    children.push(para(topDateStr, { align: AlignmentType.RIGHT, spacingAfter: 360 }));
+    children.push(para(topDateStr, { align: AlignmentType.RIGHT, spacingAfter: 480 }));
   }
 
   // Salutation
-  children.push(para(`Dear ${data.name},`, { align: baseAlign, spacingAfter: 300, size: 24 }));
+  children.push(para(`Dear ${data.name},`, { align: baseAlign, spacingAfter: 360, size: 24 }));
   children.push(blank());
 
   // Intro
@@ -91,6 +124,7 @@ function buildDocChildren(template, data) {
   if (template.lead) { children.push(para(template.lead, { align: baseAlign, spacingAfter: 260 })); }
 
   // Body lines (substitute {{date}} where present)
+  let prevWasBullet = false;
   for (const raw of template.body || []) {
     let line = raw;
     if (line.includes("{{date}}")) {
@@ -101,10 +135,15 @@ function buildDocChildren(template, data) {
       if (!line.trim()) continue;
     }
     const isBullet = line.startsWith("•");
-    children.push(para(line, {
-      align: isBullet ? AlignmentType.LEFT : baseAlign,
-      spacingAfter: isBullet ? 90 : 220,
-    }));
+    if (isBullet) {
+      children.push(bulletDetail(line));
+      prevWasBullet = true;
+    } else {
+      // add a little gap after a bullet block before the next paragraph
+      if (prevWasBullet) children.push(blank(80));
+      prevWasBullet = false;
+      children.push(para(line, { align: baseAlign, spacingAfter: 240 }));
+    }
   }
   children.push(blank());
 
