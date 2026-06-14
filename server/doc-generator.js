@@ -16,30 +16,43 @@ const PAGE = {
   margin: { top: 1700, right: 1440, bottom: 1440, left: 1440 },
 };
 
+const { getLang } = require("./languages");
+
+// Render context for the current document (font + direction), set in buildDoc.
+let RENDER = { font: null, rtl: false };
+
 // Parse a line that may contain **bold** and _italic_ spans into TextRuns.
 function inlineRuns(line, baseOpts = {}) {
+  const fontOpt = RENDER.font ? { font: RENDER.font } : {};
+  const rtlOpt = RENDER.rtl ? { rightToLeft: true } : {};
+  const merged = { ...fontOpt, ...rtlOpt, ...baseOpts };
   const runs = [];
-  // split on ** ... ** and _ ... _
   const regex = /(\*\*[^*]+\*\*|_[^_]+_)/g;
   let last = 0, m;
   while ((m = regex.exec(line)) !== null) {
-    if (m.index > last) runs.push(new TextRun({ text: line.slice(last, m.index), ...baseOpts }));
+    if (m.index > last) runs.push(new TextRun({ text: line.slice(last, m.index), ...merged }));
     const token = m[0];
     if (token.startsWith("**")) {
-      runs.push(new TextRun({ text: token.slice(2, -2), bold: true, ...baseOpts }));
+      runs.push(new TextRun({ text: token.slice(2, -2), bold: true, ...merged }));
     } else {
-      runs.push(new TextRun({ text: token.slice(1, -1), italics: true, ...baseOpts }));
+      runs.push(new TextRun({ text: token.slice(1, -1), italics: true, ...merged }));
     }
     last = regex.lastIndex;
   }
-  if (last < line.length) runs.push(new TextRun({ text: line.slice(last), ...baseOpts }));
-  return runs.length ? runs : [new TextRun({ text: line, ...baseOpts })];
+  if (last < line.length) runs.push(new TextRun({ text: line.slice(last), ...merged }));
+  return runs.length ? runs : [new TextRun({ text: line, ...merged })];
 }
 
 function para(line, opts = {}) {
-  const { align = AlignmentType.CENTER, spacingAfter = 200, bold, size = 22 } = opts;
+  let { align = AlignmentType.CENTER, spacingAfter = 200, bold, size = 22 } = opts;
+  // For RTL languages, flip default centre stays centre but left/right swap.
+  if (RENDER.rtl) {
+    if (align === AlignmentType.LEFT) align = AlignmentType.RIGHT;
+    else if (align === AlignmentType.RIGHT) align = AlignmentType.LEFT;
+  }
   return new Paragraph({
     alignment: align,
+    bidirectional: RENDER.rtl || undefined,
     spacing: { after: spacingAfter, line: 276 },
     children: inlineRuns(line, { size, ...(bold ? { bold: true } : {}) }),
   });
@@ -49,8 +62,10 @@ function blank(spacingAfter = 160) {
   return new Paragraph({ spacing: { after: spacingAfter }, children: [new TextRun("")] });
 }
 
-// data: { name, confirmation, date, signatoryKey, signatories? }
+// data: { name, confirmation, date, signatoryKey, signatories?, lang? }
 function buildDoc(template, data) {
+  const lang = getLang(data.lang || template.lang || "en");
+  RENDER = { font: lang.font, rtl: !!lang.rtl };
   const children = [];
   const sigMap = data.signatories || FALLBACK_SIGNATORIES;
   const sig = sigMap[data.signatoryKey || template.signatory] || Object.values(sigMap)[0] || { name: "", title: "" };
@@ -113,7 +128,7 @@ function buildDoc(template, data) {
   }
 
   return new Document({
-    styles: { default: { document: { run: { font: "Calibri", size: 22 } } } },
+    styles: { default: { document: { run: { font: RENDER.font || "Calibri", size: 22 } } } },
     sections: [{ properties: { page: PAGE }, children }],
   });
 }
