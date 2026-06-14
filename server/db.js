@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS guests (
   list_type TEXT NOT NULL DEFAULT 'arrival',
   villa TEXT, villa_type TEXT, arrival TEXT, departure TEXT,
   arrival_flight TEXT, departure_flight TEXT,
+  transport_type TEXT, destination_type TEXT,
+  luggage_time TEXT, checkout_time TEXT, transfer_time TEXT,
+  next_destination TEXT, intl_flight_time TEXT,
   checked_in_at TEXT, checked_out_at TEXT, status TEXT NOT NULL DEFAULT 'active',
   meal_plan TEXT, nationality TEXT, confirmation TEXT,
   name TEXT, guests_json TEXT,
@@ -146,6 +149,9 @@ try {
     db.exec("ALTER TABLE guests ADD COLUMN checked_in_at TEXT");
   if (!cols.includes("checked_out_at"))
     db.exec("ALTER TABLE guests ADD COLUMN checked_out_at TEXT");
+  ["transport_type","destination_type","luggage_time","checkout_time","transfer_time","next_destination","intl_flight_time"].forEach((c) => {
+    if (!cols.includes(c)) db.exec(`ALTER TABLE guests ADD COLUMN ${c} TEXT`);
+  });
   if (!cols.includes("status"))
     db.exec("ALTER TABLE guests ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
 } catch (e) {}
