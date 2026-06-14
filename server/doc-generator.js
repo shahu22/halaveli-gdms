@@ -101,9 +101,12 @@ function buildDocChildren(template, data) {
   // Default alignment for this document (vouchers center; letters left-align)
   const baseAlign = template.align === "left" ? AlignmentType.LEFT : AlignmentType.CENTER;
 
-  // Top space for a printed letterhead logo (letters only).
-  if (template.letterheadSpace) {
-    children.push(blank(template.letterheadSpace));
+  // Top space for a printed letterhead logo. Applies to every document (vouchers
+  // and letters print on the same letterhead). A template can override the amount
+  // or set it to 0 to disable.
+  const lhSpace = template.letterheadSpace != null ? template.letterheadSpace : 1400;
+  if (lhSpace) {
+    children.push(blank(lhSpace));
   }
 
   // Optional top date. topDateText is an exact pre-formatted string (departure
