@@ -1,925 +1,1772 @@
-// ============================================================================
-//  HALAVELI GUEST DOCUMENT MANAGEMENT SYSTEM — server
-// ============================================================================
-const express = require("express");
-const cookieParser = require("cookie-parser");
-const path = require("path");
-const fs = require("fs");
-const os = require("os");
-
-const { db, bcrypt, newToken, getTemplate, listTemplates, getSignatories, safeParse: dbSafeParse } = require("./db");
-const { LANGUAGES } = require("./languages");
-const P = require("./opera-parser");
-const { generateDocx, generateMultiDocx, convertToPdf } = require("./doc-generator");
-const { buildDepartureTemplate } = require("./departure-letter");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const OUT_DIR = process.env.OUT_DIR || path.join(__dirname, "..", "data", "generated");
-fs.mkdirSync(OUT_DIR, { recursive: true });
-
-app.use(express.json({ limit: "20mb" }));
-app.use(express.text({ limit: "20mb", type: ["text/plain", "text/tab-separated-values"] }));
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, "..", "public")));
-
-// ---- Auth middleware ------------------------------------------------------
-function auth(req, res, next) {
-  const token = req.cookies.sid;
-  if (!token) return res.status(401).json({ error: "Not logged in" });
-  const session = db.prepare("SELECT * FROM sessions WHERE token=?").get(token);
-  if (!session) return res.status(401).json({ error: "Session expired" });
-  req.user = db.prepare("SELECT id,username,display_name,role,can_manage_templates FROM users WHERE id=?").get(session.user_id);
-  if (!req.user) return res.status(401).json({ error: "User gone" });
-  req.user.can_manage_templates = !!req.user.can_manage_templates;
-  next();
-}
-function adminOnly(req, res, next) {
-  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-  next();
-}
-function canManageTemplates(req, res, next) {
-  if (req.user.role === "admin" || req.user.can_manage_templates) return next();
-  return res.status(403).json({ error: "Not allowed to manage templates" });
-}
-
-// ============================================================================
-//  AUTH
-// ============================================================================
-app.post("/api/login", (req, res) => {
-  const { username, password } = req.body || {};
-  const user = db.prepare("SELECT * FROM users WHERE username=?").get(String(username || "").trim());
-  if (!user || !bcrypt.compareSync(String(password || ""), user.password_hash)) {
-    return res.status(401).json({ error: "Invalid username or password" });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Halaveli · Guest Document System</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Jost:wght@300;400;500;600&display=swap');
+  :root{
+    --sea:#0a5e63; --sea-deep:#063e42; --sea-light:#d4ebe9;
+    --sand:#f6f1e7; --sand-deep:#ece2cf; --ink:#23201b; --ink-soft:#6f675a;
+    --coral:#c45a3b; --coral-soft:#f6e0d6; --gold:#b58a36; --gold-soft:#f1e6c9;
+    --white:#fffdf9; --line:#dcd2bd;
+    --shadow:0 1px 2px rgba(20,30,30,.05),0 10px 30px rgba(20,30,30,.08);
+    --shadow-lg:0 20px 60px rgba(10,30,30,.25);
   }
-  const token = newToken();
-  db.prepare("INSERT INTO sessions (token,user_id) VALUES (?,?)").run(token, user.id);
-  res.cookie("sid", token, { httpOnly: true, sameSite: "lax", maxAge: 1000 * 60 * 60 * 24 * 7 });
-  res.json({ user: { username: user.username, display_name: user.display_name, role: user.role } });
-});
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Jost',sans-serif;background:var(--sand);color:var(--ink);font-size:14px;
+    background-image:radial-gradient(circle at 90% -5%,rgba(10,94,99,.06),transparent 45%),radial-gradient(circle at 0% 100%,rgba(196,90,59,.05),transparent 40%);min-height:100vh}
+  h1,h2,h3{font-family:'Cormorant Garamond',serif;font-weight:600}
+  button{font-family:'Jost',sans-serif;cursor:pointer;border:none}
+  input,select,textarea{font-family:'Jost',sans-serif;font-size:14px}
+  .hidden{display:none!important}
 
-app.post("/api/logout", auth, (req, res) => {
-  db.prepare("DELETE FROM sessions WHERE token=?").run(req.cookies.sid);
-  res.clearCookie("sid");
-  res.json({ ok: true });
-});
+  /* LOGIN */
+  #login{min-height:100vh;display:grid;place-items:center;padding:20px}
+  .login-card{background:var(--white);border-radius:22px;box-shadow:var(--shadow-lg);padding:48px 44px;width:100%;max-width:400px;text-align:center;border-top:4px solid var(--sea)}
+  .login-card .crest{width:54px;height:54px;border:1.5px solid var(--sea);border-radius:50%;display:grid;place-items:center;margin:0 auto 18px;font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--sea)}
+  .login-card h1{font-size:30px;color:var(--sea-deep)}
+  .login-card .sub{color:var(--ink-soft);font-size:12px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 28px}
+  .field{margin-bottom:16px;text-align:left}
+  .field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-bottom:6px;font-weight:500}
+  .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--sand);color:var(--ink)}
+  .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--sea);background:var(--white)}
+  .err{color:var(--coral);font-size:12px;margin-top:10px;min-height:16px}
 
-app.get("/api/me", auth, (req, res) => res.json({ user: req.user }));
+  .btn{border-radius:10px;padding:11px 20px;font-weight:500;font-size:13px;display:inline-flex;align-items:center;gap:7px;justify-content:center;transition:transform .1s,box-shadow .15s,background .15s}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--sea);color:#fff;width:100%}
+  .btn-primary:hover{background:var(--sea-deep)}
+  .btn-coral{background:var(--coral);color:#fff}
+  .btn-gold{background:var(--gold);color:#fff}
+  .btn-ghost{background:var(--white);color:var(--ink);border:1px solid var(--line)}
+  .btn-ghost:hover{border-color:var(--sea);color:var(--sea)}
+  .btn-sm{padding:7px 13px;font-size:12px;border-radius:8px}
 
-// ---- User management (admin) ---------------------------------------------
-app.get("/api/users", auth, adminOnly, (req, res) => {
-  res.json(db.prepare("SELECT id,username,display_name,role,can_manage_templates,created_at FROM users ORDER BY id").all()
-    .map((u) => ({ ...u, can_manage_templates: !!u.can_manage_templates })));
-});
-app.post("/api/users", auth, adminOnly, (req, res) => {
-  const { username, password, display_name, role, can_manage_templates } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "username & password required" });
-  try {
-    const hash = bcrypt.hashSync(String(password), 10);
-    const info = db.prepare(
-      "INSERT INTO users (username,password_hash,display_name,role,can_manage_templates) VALUES (?,?,?,?,?)"
-    ).run(String(username).trim(), hash, display_name || username,
-      role === "admin" ? "admin" : "staff", can_manage_templates ? 1 : 0);
-    res.json({ id: info.lastInsertRowid });
-  } catch (e) {
-    res.status(400).json({ error: "Username already exists" });
-  }
-});
-app.post("/api/users/:id/password", auth, adminOnly, (req, res) => {
-  const hash = bcrypt.hashSync(String(req.body.password || ""), 10);
-  db.prepare("UPDATE users SET password_hash=? WHERE id=?").run(hash, req.params.id);
-  res.json({ ok: true });
-});
-app.post("/api/users/:id/capabilities", auth, adminOnly, (req, res) => {
-  const can = req.body.can_manage_templates ? 1 : 0;
-  db.prepare("UPDATE users SET can_manage_templates=? WHERE id=?").run(can, req.params.id);
-  res.json({ ok: true });
-});
-app.delete("/api/users/:id", auth, adminOnly, (req, res) => {
-  if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: "Can't delete yourself" });
-  db.prepare("DELETE FROM users WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
-});
+  /* APP SHELL */
+  #app{display:none;min-height:100vh;flex-direction:column}
+  .topbar{background:var(--sea-deep);color:#fff;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;box-shadow:var(--shadow);position:sticky;top:0;z-index:40;flex-wrap:wrap}
+  .topbar .brand{display:flex;align-items:center;gap:12px}
+  .topbar .crest{width:34px;height:34px;border:1.5px solid rgba(255,255,255,.55);border-radius:50%;display:grid;place-items:center;font-family:'Cormorant Garamond',serif;font-size:18px}
+  .topbar h2{font-size:20px;font-weight:500;line-height:1}
+  .topbar .tag{font-size:10px;letter-spacing:1.5px;opacity:.65;text-transform:uppercase}
+  .nav{display:flex;gap:4px;align-items:center}
+  .nav button{background:transparent;color:rgba(255,255,255,.8);padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500}
+  .nav button.active{background:rgba(255,255,255,.15);color:#fff}
+  .nav button:hover{color:#fff}
+  .user-chip{display:flex;align-items:center;gap:10px;font-size:13px}
+  .user-chip .who{opacity:.85}
 
-// ============================================================================
-//  TEMPLATES  (now DB-backed + Template Builder)
-// ============================================================================
-// List templates for the guest panel / pickers (English by default).
-app.get("/api/templates", auth, (req, res) => {
-  const lang = req.query.lang || "en";
-  res.json({
-    templates: listTemplates(lang).map((t) => ({
-      id: t.id, category: t.category, label: t.label, hasDate: t.hasDate,
-      dateLabel: t.dateLabel || null, signatory: t.signatory,
-    })),
-    signatories: getSignatories(),
-    canManage: req.user.role === "admin" || req.user.can_manage_templates,
-    languages: LANGUAGES,
-  });
-});
+  .wrap{max-width:1500px;margin:0 auto;padding:22px 24px 80px;width:100%}
 
-// Full template detail for the builder (includes body + all fields).
-app.get("/api/templates/:key", auth, (req, res) => {
-  const lang = req.query.lang || "en";
-  const t = getTemplate(req.params.key, lang);
-  if (!t) return res.status(404).json({ error: "Template not found" });
-  res.json(t);
-});
+  /* DAY BAR */
+  .daybar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--white);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow);margin-bottom:20px}
+  .daybar select{min-width:180px}
+  .daybar .spacer{flex:1}
+  .pill{font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.5px}
+  .pill.open{background:var(--sea-light);color:var(--sea-deep)}
+  .pill.closed{background:var(--sand-deep);color:var(--ink-soft)}
 
-// Admin/manager list including archived + which languages exist per key.
-app.get("/api/manage/templates", auth, canManageTemplates, (req, res) => {
-  const lang = req.query.lang || "en";
-  const rows = listTemplates(lang, true);
-  // attach available languages per template_key
-  const langs = {};
-  db.prepare("SELECT template_key, lang FROM templates").all().forEach((r) => {
-    (langs[r.template_key] = langs[r.template_key] || []).push(r.lang);
-  });
-  res.json({
-    templates: rows.map((t) => ({ ...t, languages: langs[t.id] || ["en"] })),
-    signatories: getSignatories(),
-    categories: [...new Set(listTemplates(lang, true).map((t) => t.category))],
-  });
-});
+  /* STATS */
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  .stat{background:var(--white);border-radius:14px;padding:14px 18px;box-shadow:var(--shadow);flex:1;min-width:120px;border-left:3px solid var(--sea)}
+  .stat .n{font-family:'Cormorant Garamond',serif;font-size:30px;font-weight:600;line-height:1}
+  .stat .l{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-top:4px}
+  .stat.coral{border-left-color:var(--coral)} .stat.gold{border-left-color:var(--gold)}
 
-function slugify(s) {
-  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40)
-    || "tpl_" + Date.now();
+  /* TOOLBAR */
+  .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .search{flex:1;min-width:200px;background:var(--white);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+  .search:focus{outline:none;border-color:var(--sea)}
+  .seg{display:flex;background:var(--white);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{padding:9px 15px;font-size:12px;font-weight:500;color:var(--ink-soft);background:transparent}
+  .seg button.on{background:var(--sea);color:#fff}
+
+  /* TABLE */
+  .card{background:var(--white);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+  .scroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;min-width:980px}
+  thead th{background:var(--sea-deep);color:#fff;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.7px;padding:12px 10px;text-align:left;white-space:nowrap}
+  tbody tr{border-bottom:1px solid var(--sand-deep)}
+  tbody tr:hover{background:var(--sand)}
+  tbody td{padding:9px 10px;font-size:13px;vertical-align:middle}
+  .name-cell{font-weight:500;min-width:230px}
+  .conf-cell{font-variant-numeric:tabular-nums;color:var(--sea-deep);font-weight:500}
+  .flagwrap{display:flex;gap:4px;align-items:center}
+  .stay-badge{font-size:10px;font-weight:700;background:var(--sea);color:#fff;border-radius:6px;padding:2px 6px;white-space:nowrap}
+  .remarks-cell{font-size:12px;color:var(--ink-soft);max-width:180px}
+  .flag{width:25px;height:25px;border-radius:7px;display:grid;place-items:center;font-size:12px;border:1px solid var(--line);background:var(--sand);cursor:pointer;user-select:none}
+  .flag.on.hm{background:var(--coral);border-color:var(--coral);color:#fff}
+  .flag.on.an{background:var(--gold);border-color:var(--gold);color:#fff}
+  .flag.on.rp{background:var(--sea);border-color:var(--sea);color:#fff}
+  .badge{display:inline-block;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600}
+  .badge.aip{background:var(--sea-light);color:var(--sea-deep)}
+  .badge.hb{background:var(--gold-soft);color:var(--gold)}
+  .badge.fb{background:var(--coral-soft);color:var(--coral)}
+  .badge.bb,.badge.none{background:var(--sand-deep);color:var(--ink-soft)}
+  .doc-count{font-size:11px;background:var(--sea-light);color:var(--sea-deep);border-radius:20px;padding:2px 9px;font-weight:600}
+  .linkbtn{background:none;color:var(--sea);font-weight:500;font-size:12px;padding:6px 10px;border:1px solid var(--line);border-radius:8px}
+  .linkbtn:hover{border-color:var(--sea);background:var(--sea-light)}
+  .empty{text-align:center;padding:50px;color:var(--ink-soft)}
+  .sec-row td{background:var(--sand-deep);font-family:'Cormorant Garamond',serif;font-size:16px;font-weight:600;color:var(--sea-deep);padding:10px 14px!important;letter-spacing:.3px}
+  .sec-row.overdue td{background:var(--coral-soft);color:var(--coral)}
+  .sec-row.tomorrow td{background:var(--gold-soft);color:var(--gold)}
+
+  /* PANEL */
+  .overlay{position:fixed;inset:0;background:rgba(15,25,25,.4);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .25s;z-index:90}
+  .overlay.open{opacity:1;pointer-events:auto}
+  .panel{position:fixed;top:0;right:0;height:100%;width:540px;max-width:96vw;background:var(--sand);box-shadow:var(--shadow-lg);transform:translateX(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);z-index:91;display:flex;flex-direction:column}
+  .panel.open{transform:translateX(0)}
+  .panel-head{background:var(--sea-deep);color:#fff;padding:20px 24px;position:relative}
+  .panel-head .villa{font-family:'Cormorant Garamond',serif;font-size:24px}
+  .panel-head .sub{font-size:12px;opacity:.8;margin-top:2px}
+  .panel-head .x{position:absolute;top:16px;right:18px;background:rgba(255,255,255,.15);width:30px;height:30px;border-radius:8px;color:#fff;font-size:16px}
+  .panel-body{padding:22px 24px;overflow-y:auto;flex:1}
+  .section-title{font-family:'Cormorant Garamond',serif;font-size:19px;color:var(--sea-deep);margin:22px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .section-title:first-child{margin-top:0}
+
+  .toggle-row{display:flex;gap:8px;margin-bottom:8px}
+  .lockbar{background:var(--gold-soft);color:var(--gold);border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:500;margin-bottom:14px;line-height:1.5}
+  .panel-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  .toggle.lk{opacity:.6;cursor:not-allowed}
+  .toggle{flex:1;border:1.5px solid var(--line);border-radius:11px;padding:11px;text-align:center;cursor:pointer;background:var(--white)}
+  .toggle .ti{font-size:18px}
+  .toggle .tl{font-size:10px;font-weight:600;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+  .toggle.on.hm{background:var(--coral-soft);border-color:var(--coral)}
+  .toggle.on.an{background:var(--gold-soft);border-color:var(--gold)}
+  .toggle.on.rp{background:var(--sea-light);border-color:var(--sea)}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .nameedit{background:var(--white);border-radius:11px;padding:12px;margin-top:8px}
+  .nameedit .grp{display:flex;gap:6px;align-items:center;margin-bottom:7px}
+  .nameedit select{border:1px solid var(--line);border-radius:7px;padding:6px}
+  .nameedit input{flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;min-width:50px}
+  .nameedit .tag{font-size:9px;font-weight:700;color:var(--ink-soft);width:34px;text-transform:uppercase}
+  .preview{background:var(--sea-light);border-radius:9px;padding:10px 12px;font-weight:500;color:var(--sea-deep);margin-top:6px}
+  .rm{background:none;color:var(--line);font-size:15px;padding:2px 5px}.rm:hover{color:var(--coral)}
+
+  /* voucher chooser */
+  .vcat{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin:14px 0 6px;font-weight:600}
+  .vgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .vopt{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--white);cursor:pointer;font-size:12.5px;display:flex;align-items:center;gap:8px}
+  .vopt:hover{border-color:var(--sea)}
+  .vopt .chk{width:16px;height:16px;border:1.5px solid var(--line);border-radius:5px;flex:none;display:grid;place-items:center;font-size:11px;color:#fff}
+  .vopt.sel{border-color:var(--sea);background:var(--sea-light)}
+  .vopt.sel .chk{background:var(--sea);border-color:var(--sea)}
+  .vopt .sug{font-size:9px;background:var(--gold-soft);color:var(--gold);border-radius:8px;padding:1px 6px;margin-left:auto;font-weight:700}
+
+  /* doc list */
+  .doc{background:var(--white);border-radius:11px;padding:13px 15px;margin-bottom:10px;border:1px solid var(--line)}
+  .doc .dh{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+  .doc .dt{font-weight:500}
+  .doc .dstat{font-size:10px;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:10px}
+  .doc .dstat.draft{background:var(--sand-deep);color:var(--ink-soft)}
+  .doc .dstat.exported{background:var(--sea-light);color:var(--sea-deep)}
+  .doc .drow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  .doc textarea,.doc input{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:6px}
+  .mini-label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--ink-soft);margin-top:8px;display:block}
+
+  /* admin / modals */
+  .modal-overlay{position:fixed;inset:0;background:rgba(15,25,25,.45);display:none;place-items:center;z-index:100;padding:20px}
+  .modal-overlay.open{display:grid}
+  .modal{background:var(--white);border-radius:18px;box-shadow:var(--shadow-lg);width:100%;max-width:460px;padding:28px}
+  .modal h3{font-size:24px;color:var(--sea-deep);margin-bottom:18px}
+  .modal .row{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+  .userrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--sand-deep)}
+  .userrow .ur-role{font-size:10px;text-transform:uppercase;letter-spacing:.5px;background:var(--sea-light);color:var(--sea-deep);padding:2px 8px;border-radius:10px;margin-left:8px}
+
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--ink);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;box-shadow:var(--shadow-lg);opacity:0;transition:all .3s;z-index:200}
+  .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+  ::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+
+  .importbox{border:2px dashed var(--line);border-radius:14px;padding:18px;text-align:center;background:var(--white);margin-bottom:14px}
+  .importbox textarea{width:100%;min-height:90px;border:1px solid var(--line);border-radius:10px;padding:10px;margin:10px 0;font-family:ui-monospace,monospace;font-size:11px}
+
+  /* TEMPLATE LIST */
+  .tpl-row{display:flex;align-items:center;gap:12px;padding:13px 20px;border-bottom:1px solid var(--sand-deep)}
+  .tpl-row:last-child{border-bottom:none}
+  .tpl-row:hover{background:var(--sand)}
+  .tpl-row.archived{opacity:.5}
+  .tpl-cat{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--sea-deep);background:var(--sea-light);padding:3px 9px;border-radius:10px;font-weight:600;white-space:nowrap}
+  .tpl-name{font-weight:500;flex:1}
+  .tpl-meta{font-size:11px;color:var(--ink-soft)}
+  .tpl-actions{display:flex;gap:6px}
+  .tpl-cat-head{font-family:'Cormorant Garamond',serif;font-size:18px;color:var(--sea-deep);padding:14px 20px 6px;font-weight:600}
+
+  /* TEMPLATE EDITOR */
+  .tpl-editor{position:fixed;inset:0;background:var(--sand);z-index:120;display:none;flex-direction:column}
+  .tpl-editor.open{display:flex}
+  .tpl-editor-head{background:var(--sea-deep);color:#fff;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;font-family:'Cormorant Garamond',serif;font-size:22px}
+  .tpl-editor-body{flex:1;display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
+  .tpl-form{overflow-y:auto;padding:24px 28px;border-right:1px solid var(--line)}
+  .tpl-preview-pane{overflow-y:auto;padding:24px 28px;background:var(--sand-deep)}
+  .tpl-preview-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft);margin-bottom:12px;font-weight:600}
+  .tpl-paper{background:#fff;border-radius:6px;box-shadow:var(--shadow);padding:54px 60px;min-height:70vh;font-family:Calibri,sans-serif;text-align:center;font-size:13px;line-height:1.7;color:#222}
+  .tpl-paper .pl{margin-bottom:14px;white-space:pre-wrap}
+  .tpl-paper .pl.b{font-weight:700}.tpl-paper .pl.i{font-style:italic;font-size:12px}
+  .tpl-paper .pl.bullet{text-align:left;margin-bottom:5px}
+  .tpl-paper .pl.conf{text-align:right;color:#666;font-size:11px;margin-top:30px}
+  .tpl-field{margin-bottom:15px}
+  .tpl-field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink-soft);margin-bottom:5px;font-weight:600}
+  .tpl-field input,.tpl-field select,.tpl-field textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#fff;font-size:13px}
+  .tpl-field textarea{resize:vertical;line-height:1.5}
+  .tpl-field .hint{font-size:11px;color:var(--ink-soft);margin-top:4px}
+  .doc-edit-note{background:var(--sea-light);color:var(--sea-deep);border-radius:9px;padding:10px 13px;font-size:12px;line-height:1.5;margin-bottom:16px}
+  .tpl-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .body-line{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start}
+  .body-line textarea{flex:1;min-height:38px}
+  .body-line .lt{display:flex;flex-direction:column;gap:3px}
+  .body-line select{font-size:11px;padding:4px}
+  .chipbtn{font-size:11px;background:var(--sea-light);color:var(--sea-deep);border-radius:7px;padding:5px 9px;font-weight:500}
+  .chipbtn:hover{background:var(--sea);color:#fff}
+  .insert-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  @media(max-width:900px){.tpl-editor-body{grid-template-columns:1fr}.tpl-preview-pane{display:none}}
+
+  /* ALBUM */
+  .album-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
+  .vgroup{grid-column:1/-1;font-family:'Cormorant Garamond',serif;font-size:19px;color:var(--sea-deep);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:5px;margin-top:8px}
+  .pcard{background:var(--white);border-radius:14px;overflow:hidden;box-shadow:var(--shadow);transition:transform .12s,box-shadow .15s;display:flex;flex-direction:column}
+  .pcard:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg)}
+  .pcard .ph{aspect-ratio:3/4;background:var(--sand-deep);position:relative;overflow:hidden;display:grid;place-items:center;cursor:pointer}
+  .pcard .ph img{width:100%;height:100%;object-fit:cover}
+  .pcard .ph .noimg{color:var(--ink-soft);font-size:34px;font-family:'Cormorant Garamond',serif}
+  .pcard .ph .lead-tag{position:absolute;top:7px;left:7px;background:var(--sea);color:#fff;font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 7px;border-radius:8px;text-transform:uppercase}
+  .pcard .meta{padding:9px 11px;cursor:pointer}
+  .pcard .meta .pn{font-weight:500;font-size:13px;line-height:1.25}
+  .pcard .meta .pv{font-size:11px;color:var(--ink-soft);margin-top:1px}
+  .pcard .addbtn{margin:0 11px 11px;font-size:11px;text-align:center;background:var(--sea-light);color:var(--sea-deep);border-radius:7px;padding:6px;font-weight:600;cursor:pointer}
+  .pcard .addbtn:hover{background:var(--sea);color:#fff}
+
+  /* CROP MODAL */
+  .crop-overlay{position:fixed;inset:0;background:rgba(15,25,25,.55);display:none;place-items:center;z-index:130;padding:20px}
+  .crop-overlay.open{display:grid}
+  .crop-box{background:var(--white);border-radius:18px;box-shadow:var(--shadow-lg);padding:22px;width:100%;max-width:420px}
+  .crop-head{font-family:'Cormorant Garamond',serif;font-size:21px;color:var(--sea-deep);margin-bottom:14px}
+  .crop-stage{width:300px;height:400px;margin:0 auto;border-radius:10px;overflow:hidden;background:#222;touch-action:none}
+  #cropCanvas{width:300px;height:400px;display:block;cursor:grab}
+  #cropCanvas:active{cursor:grabbing}
+  .crop-controls{margin:14px 0}
+  .crop-controls label{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+  .crop-controls input[type=range]{flex:1}
+  .crop-hint{font-size:11px;color:var(--ink-soft);text-align:center}
+  .crop-actions{display:flex;gap:8px;justify-content:flex-end}
+  .prof-photo{width:120px;aspect-ratio:3/4;border-radius:12px;object-fit:cover;background:var(--sand-deep);box-shadow:var(--shadow)}
+</style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <div class="login-card">
+    <div class="crest">H</div>
+    <h1>Halaveli</h1>
+    <div class="sub">Guest Document System</div>
+    <div class="field"><label>Username</label><input id="lUser" autocomplete="username"></div>
+    <div class="field"><label>Password</label><input id="lPass" type="password" autocomplete="current-password"></div>
+    <button class="btn btn-primary" id="loginBtn">Sign In</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <div class="brand">
+      <div class="crest">H</div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.9</div></div>
+    </div>
+    <div class="nav" id="nav">
+      <button data-view="guests" class="active">Guest Lists</button>
+      <button data-view="documents">Documents</button>
+      <button data-view="album">Album</button>
+      <button data-view="templates" id="navTemplates">Templates</button>
+      <button data-view="admin" id="navAdmin">Admin</button>
+    </div>
+    <div class="user-chip">
+      <span class="who" id="whoami"></span>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Sign out</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- GUESTS VIEW -->
+    <div id="view-guests">
+      <div class="daybar">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--ink-soft)">Business Day</label>
+        <select id="daySelect"></select>
+        <span class="pill open" id="dayStatus">open</span>
+        <button class="btn btn-ghost btn-sm" id="newDayBtn">+ New Day</button>
+        <button class="btn btn-ghost btn-sm" id="importBtn">⬆ Import Arrivals</button>
+        <button class="btn btn-ghost btn-sm hidden" id="newBookingBtn">+ New Booking</button>
+        <div class="spacer"></div>
+      </div>
+
+      <div class="importbox hidden" id="importBox">
+        <strong>Paste tab-delimited Opera arrivals export</strong> (res_detail)
+        <textarea id="importText" placeholder="Paste the full exported arrivals text here…"></textarea>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <button class="btn btn-primary btn-sm" style="width:auto" id="doImport">Import Arrivals</button>
+          <button class="btn btn-ghost btn-sm" id="cancelImport">Cancel</button>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="toolbar">
+        <input class="search" id="search" placeholder="Search name, villa, confirmation…">
+        <button class="btn btn-ghost btn-sm hidden" id="exportDepPics">⬇ Export Departure Pictures</button>
+        <button class="btn btn-ghost btn-sm hidden" id="genAllLetters">⬇ Generate All Letters</button>
+        <div class="seg" id="listSeg">
+          <button data-lt="arrival" class="on">Arrivals</button>
+          <button data-lt="inhouse">In-House</button>
+          <button data-lt="departure">Departures</button>
+          <button data-lt="checkedout">Checked Out</button>
+        </div>
+      </div>
+
+      <div class="card"><div class="scroll"><table>
+        <thead><tr>
+          <th>Flags</th><th>Villa</th><th>Nat.</th><th>Arrival</th><th>Departure</th><th>MP</th>
+          <th>Name</th><th>Remarks</th><th>Confirmation</th><th>Docs</th><th></th>
+        </tr></thead>
+        <tbody id="gbody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- TEMPLATES VIEW (Template Builder) -->
+    <div id="view-templates" class="hidden">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+        <h2 style="font-size:26px;color:var(--sea-deep)">Document Templates</h2>
+        <span class="pill open" id="tplLangPill">English</span>
+        <div class="spacer" style="flex:1"></div>
+        <button class="btn btn-ghost btn-sm" id="manageSignatoriesBtn">Signatories</button>
+        <button class="btn btn-primary btn-sm" style="width:auto" id="newTplBtn">+ New Template</button>
+      </div>
+      <p style="color:var(--ink-soft);font-size:12.5px;margin:-6px 0 16px;max-width:680px;line-height:1.6">
+        Create and edit the documents your team can generate — vouchers, disclaimers, upgrade letters, anything.
+        Use <code>{{name}}</code>, <code>{{date}}</code>, <code>{{confirmation}}</code> and <code>{{villa}}</code>
+        where you want guest details filled in automatically.
+      </p>
+      <div class="card" style="padding:8px 0"><div id="tplList"></div></div>
+    </div>
+
+    <!-- ALBUM VIEW -->
+    <div id="view-album" class="hidden">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap">
+        <h2 style="font-size:26px;color:var(--sea-deep)">In-House Album</h2>
+        <span class="pill open" id="albumCount">0 guests</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost btn-sm" id="albumExport">⬇ Export All</button>
+        <input class="search" id="albumSearch" placeholder="Search name or villa…" style="max-width:240px">
+      </div>
+      <p style="color:var(--ink-soft);font-size:12.5px;margin:-2px 0 16px;max-width:680px;line-height:1.6">
+        Every in-house guest, by villa. Click <strong>Add Photo</strong> on a card to upload and crop a 3:4 portrait, or click a card to open the guest profile.
+      </p>
+      <div id="albumGrid" class="album-grid"></div>
+    </div>
+
+    <!-- DOCUMENTS VIEW -->
+    <div id="view-documents" class="hidden">
+      <h2 style="font-size:26px;color:var(--sea-deep);margin-bottom:14px">All Generated Documents</h2>
+      <div class="card"><div class="scroll"><table>
+        <thead><tr><th>Document</th><th>Guest</th><th>Villa</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="dbody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="view-admin" class="hidden">
+      <h2 style="font-size:26px;color:var(--sea-deep);margin-bottom:14px">Staff Accounts</h2>
+      <div class="card" style="padding:18px 22px">
+        <div id="userList"></div>
+        <button class="btn btn-primary btn-sm" style="width:auto;margin-top:14px" id="addUserBtn">+ Add Staff Account</button>
+      </div>
+      <p style="color:var(--ink-soft);font-size:12px;margin-top:14px;max-width:560px;line-height:1.6">
+        Only administrators can create accounts and set passwords. Grant “Manage templates” to let trusted staff
+        create and edit document templates without full admin access.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- PHOTO CROP MODAL -->
+<div class="crop-overlay" id="cropOverlay">
+  <div class="crop-box">
+    <div class="crop-head">Adjust Photo — 3:4 portrait</div>
+    <div class="crop-stage" id="cropStage">
+      <canvas id="cropCanvas" width="360" height="480"></canvas>
+    </div>
+    <div class="crop-controls">
+      <label>Zoom <input type="range" id="cropZoom" min="1" max="4" step="0.01" value="1"></label>
+      <label>Brightness <input type="range" id="cropBright" min="50" max="150" step="1" value="100"></label>
+      <label>Angle <input type="range" id="cropAngle" min="-45" max="45" step="1" value="0"></label>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:4px">
+        <button class="btn btn-ghost btn-sm" id="cropRotL">⟲ 90° Left</button>
+        <button class="btn btn-ghost btn-sm" id="cropRotR">90° Right ⟳</button>
+      </div>
+      <div class="crop-hint">Drag the image to reposition.</div>
+    </div>
+    <div class="crop-actions">
+      <button class="btn btn-ghost btn-sm" id="cropCancel">Cancel</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="cropSave">Save Photo</button>
+    </div>
+  </div>
+</div>
+
+<!-- GUEST PROFILE PANEL -->
+<div class="overlay" id="profOverlay"></div>
+<div class="panel" id="profPanel">
+  <div class="panel-head"><button class="x" id="profClose">✕</button>
+    <div class="villa" id="profName">Guest</div><div class="sub" id="profSub"></div></div>
+  <div class="panel-body" id="profBody"></div>
+</div>
+
+<!-- DOCUMENT EDITOR (full overlay) -->
+<div class="tpl-editor" id="docEditor">
+  <div class="tpl-editor-head">
+    <div><span id="docEditTitle">Edit Voucher</span></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" id="docResetOverride" title="Revert to the template's original wording">Reset to template</button>
+      <button class="btn btn-ghost btn-sm" id="docEditCancel">Close</button>
+      <button class="btn btn-gold btn-sm" style="width:auto" id="docExportWord">⬇ Word</button>
+      <button class="btn btn-coral btn-sm" style="width:auto" id="docExportPdf">⬇ PDF</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="docEditSave">Save</button>
+    </div>
+  </div>
+  <div class="tpl-editor-body">
+    <div class="tpl-form" id="docForm"></div>
+    <div class="tpl-preview-pane">
+      <div class="tpl-preview-label">Live Preview</div>
+      <div class="tpl-paper" id="docPaper"></div>
+    </div>
+  </div>
+</div>
+
+<!-- TEMPLATE EDITOR (full overlay) -->
+<div class="tpl-editor" id="tplEditor">
+  <div class="tpl-editor-head">
+    <div><span id="tplEditTitle">Edit Template</span></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-ghost btn-sm" id="tplCancel">Close</button>
+      <button class="btn btn-primary btn-sm" style="width:auto" id="tplSave">Save Template</button>
+    </div>
+  </div>
+  <div class="tpl-editor-body">
+    <div class="tpl-form" id="tplForm"></div>
+    <div class="tpl-preview-pane">
+      <div class="tpl-preview-label">Live Preview</div>
+      <div class="tpl-paper" id="tplPaper"></div>
+    </div>
+  </div>
+</div>
+
+<!-- GUEST PANEL -->
+<div class="overlay" id="overlay"></div>
+<div class="panel" id="panel">
+  <div class="panel-head"><button class="x" id="panelClose">✕</button>
+    <div class="villa" id="pVilla">Villa</div><div class="sub" id="pSub"></div></div>
+  <div class="panel-body" id="panelBody"></div>
+</div>
+
+<!-- MODALS -->
+<div class="modal-overlay" id="modal"><div class="modal" id="modalInner"></div></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const api = {
+  async req(method, url, body){
+    const opt={method,headers:{}};
+    if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
+    const r=await fetch(url,opt);
+    if(r.status===401){showLogin();throw new Error('unauth');}
+    const ct=r.headers.get('content-type')||'';
+    if(ct.includes('application/json')){const d=await r.json();if(!r.ok)throw new Error(d.error||'error');return d;}
+    if(!r.ok)throw new Error('error');return r;
+  },
+  get:(u)=>api.req('GET',u), post:(u,b)=>api.req('POST',u,b),
+  put:(u,b)=>api.req('PUT',u,b), del:(u)=>api.req('DELETE',u),
+};
+
+let state={user:null,days:[],dayId:null,listType:'arrival',guests:[],templates:[],signatories:{},languages:[],search:''};
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ---------- AUTH ---------- */
+function showLogin(){document.getElementById('login').style.display='grid';document.getElementById('app').style.display='none';}
+function showApp(){document.getElementById('login').style.display='none';document.getElementById('app').style.display='flex';}
+
+document.getElementById('loginBtn').onclick=async()=>{
+  const username=document.getElementById('lUser').value, password=document.getElementById('lPass').value;
+  try{const d=await api.post('/api/login',{username,password});state.user=d.user;await boot();}
+  catch(e){document.getElementById('loginErr').textContent='Invalid username or password';}
+};
+document.getElementById('lPass').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('loginBtn').click();});
+document.getElementById('logoutBtn').onclick=async()=>{await api.post('/api/logout');state.user=null;showLogin();};
+
+/* ---------- BOOT ---------- */
+async function boot(){
+  showApp();
+  document.getElementById('whoami').textContent=state.user.display_name||state.user.username;
+  document.getElementById('navAdmin').style.display=state.user.role==='admin'?'':'none';
+  document.getElementById('newBookingBtn').classList.toggle('hidden',state.user.role!=='admin');
+  state.isAdmin=state.user.role==='admin';
+  const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
+  state.languages=t.languages||[{code:'en',en:'English',native:'English'}];
+  state.canManage=!!t.canManage;
+  document.getElementById('navTemplates').style.display=state.canManage?'':'none';
+  await loadDays();
 }
 
-// Create a new template (English base). Body fields validated lightly.
-app.post("/api/manage/templates", auth, canManageTemplates, (req, res) => {
-  const b = req.body || {};
-  if (!b.label) return res.status(400).json({ error: "Label is required" });
-  let key = b.template_key ? slugify(b.template_key) : slugify(b.label);
-  // ensure uniqueness of key
-  let base = key, n = 1;
-  while (db.prepare("SELECT 1 FROM templates WHERE template_key=? AND lang='en'").get(key)) {
-    key = base + "_" + (++n);
+/* ---------- DAYS ---------- */
+async function loadDays(){
+  state.days=await api.get('/api/days');
+  const sel=document.getElementById('daySelect');
+  if(!state.days.length){
+    // auto-create today
+    const today=new Date().toISOString().slice(0,10);
+    const d=await api.post('/api/days',{date:today});state.days=[d];
   }
-  const maxOrder = db.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM templates").get().m;
-  db.prepare(`INSERT INTO templates
-    (template_key,lang,category,label,intro,lead,body_json,closing,contact,note,
-     signoff,signatory,has_date,date_label,top_date,sort_order,created_by)
-    VALUES (@k,'en',@category,@label,@intro,@lead,@body,@closing,@contact,@note,
-     @signoff,@signatory,@has_date,@date_label,@top_date,@order,@by)`).run({
-    k: key, category: b.category || "General", label: b.label,
-    intro: b.intro || "", lead: b.lead || "", body: JSON.stringify(b.body || []),
-    closing: b.closing || "", contact: b.contact || "", note: b.note || "",
-    signoff: b.signoff || "Warmest regards,", signatory: b.signatory || "silvia",
-    has_date: b.hasDate ? 1 : 0, date_label: b.dateLabel || "",
-    top_date: b.topDate ? 1 : 0, order: maxOrder + 1, by: req.user.id,
+  sel.innerHTML=state.days.map(d=>`<option value="${d.id}">${d.the_date}</option>`).join('');
+  state.dayId=state.days[0].id;sel.value=state.dayId;
+  updateDayStatus();
+  await loadGuests();
+}
+function updateDayStatus(){
+  const d=state.days.find(x=>x.id==state.dayId);if(!d)return;
+  const el=document.getElementById('dayStatus');el.textContent=d.status;el.className='pill '+(d.status==='open'?'open':'closed');
+}
+document.getElementById('daySelect').onchange=async(e)=>{state.dayId=+e.target.value;updateDayStatus();await loadGuests();};
+document.getElementById('newDayBtn').onclick=()=>openModal(`
+  <h3>New Business Day</h3>
+  <div class="field"><label>Date</label><input id="ndDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="ndSave">Create</button></div>`,()=>{
+    document.getElementById('ndSave').onclick=async()=>{
+      const date=document.getElementById('ndDate').value;
+      const d=await api.post('/api/days',{date});closeModal();await loadDays();
+      state.dayId=d.id;document.getElementById('daySelect').value=d.id;updateDayStatus();await loadGuests();toast('Day created');
+    };
   });
-  res.json({ template_key: key });
-});
 
-// Update an existing template (specific language row).
-app.put("/api/manage/templates/:key", auth, canManageTemplates, (req, res) => {
-  const lang = req.query.lang || "en";
-  const b = req.body || {};
-  const existing = db.prepare("SELECT * FROM templates WHERE template_key=? AND lang=?").get(req.params.key, lang);
-  if (!existing) {
-    // creating a translation row for an existing key
-    const en = db.prepare("SELECT * FROM templates WHERE template_key=? AND lang='en'").get(req.params.key);
-    if (!en) return res.status(404).json({ error: "Template not found" });
-    db.prepare(`INSERT INTO templates
-      (template_key,lang,category,label,intro,lead,body_json,closing,contact,note,
-       signoff,signatory,has_date,date_label,top_date,sort_order,created_by)
-      VALUES (@k,@lang,@category,@label,@intro,@lead,@body,@closing,@contact,@note,
-       @signoff,@signatory,@has_date,@date_label,@top_date,@order,@by)`).run({
-      k: req.params.key, lang, category: b.category || en.category, label: b.label || en.label,
-      intro: b.intro || "", lead: b.lead || "", body: JSON.stringify(b.body || []),
-      closing: b.closing || "", contact: b.contact || "", note: b.note || "",
-      signoff: b.signoff || en.signoff, signatory: b.signatory || en.signatory,
-      has_date: b.hasDate ? 1 : 0, date_label: b.dateLabel || "",
-      top_date: b.topDate ? 1 : 0, order: en.sort_order, by: req.user.id,
+/* ---------- IMPORT (arrivals only) ---------- */
+document.getElementById('importBtn').onclick=()=>document.getElementById('importBox').classList.toggle('hidden');
+document.getElementById('cancelImport').onclick=()=>document.getElementById('importBox').classList.add('hidden');
+document.getElementById('doImport').onclick=async()=>{
+  const text=document.getElementById('importText').value.trim();
+  if(!text)return toast('Paste the arrivals export first');
+  const r=await api.post('/api/import',{dayId:state.dayId,text});
+  document.getElementById('importBox').classList.add('hidden');document.getElementById('importText').value='';
+  toast(`Imported ${r.added} of ${r.parsed} arrivals`);
+  state.listType='arrival';syncListSeg();await loadGuests();
+};
+
+/* ---------- NEW BOOKING (admin) ---------- */
+document.getElementById('newBookingBtn').onclick=()=>openModal(`
+  <h3>New Booking</h3>
+  <div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div class="field"><label>Villa</label><input id="nb_villa"></div>
+    <div class="field"><label>Confirmation</label><input id="nb_confirmation"></div>
+    <div class="field"><label>Arrival (e.g. 09-Jun-2026)</label><input id="nb_arrival"></div>
+    <div class="field"><label>Departure</label><input id="nb_departure"></div>
+    <div class="field"><label>Arrival Flight</label><input id="nb_arrival_flight"></div>
+    <div class="field"><label>Departure Flight</label><input id="nb_departure_flight"></div>
+  </div>
+  <div class="field"><label>Lead Guest — Title / First / Last</label>
+    <div style="display:flex;gap:6px">
+      <select id="nb_title">${['Mrs','Mr','Ms','Miss','Dr'].map(t=>`<option>${t}</option>`).join('')}</select>
+      <input id="nb_first" placeholder="First"><input id="nb_last" placeholder="Last">
+    </div></div>
+  <div class="field"><label>Meal Plan</label><input id="nb_meal_plan" placeholder="e.g. AIP (optional)"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="nb_save">Create Booking</button></div>`,()=>{
+    document.getElementById('nb_save').onclick=async()=>{
+      const g={title:document.getElementById('nb_title').value,first:document.getElementById('nb_first').value,last:document.getElementById('nb_last').value,role:'adult'};
+      const body={day_id:state.dayId,list_type:'arrival',
+        villa:document.getElementById('nb_villa').value,confirmation:document.getElementById('nb_confirmation').value,
+        arrival:document.getElementById('nb_arrival').value,departure:document.getElementById('nb_departure').value,
+        arrival_flight:document.getElementById('nb_arrival_flight').value,departure_flight:document.getElementById('nb_departure_flight').value,
+        meal_plan:document.getElementById('nb_meal_plan').value,guests:[g]};
+      await api.post('/api/guests',body);closeModal();toast('Booking created');await loadGuests();
+    };
+  });
+
+/* ---------- GUEST LIST ---------- */
+function syncListSeg(){document.querySelectorAll('#listSeg button').forEach(b=>b.classList.toggle('on',b.dataset.lt===state.listType));}
+document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();document.getElementById('exportDepPics').classList.toggle('hidden',state.listType!=='departure');document.getElementById('genAllLetters').classList.toggle('hidden',state.listType!=='departure');await loadGuests();});
+document.getElementById('search').oninput=(e)=>{state.search=e.target.value;renderGuests();};
+
+async function loadGuests(){
+  state.guests=await api.get(`/api/guests?dayId=${state.dayId}&listType=${state.listType}`);
+  renderGuests();
+}
+function mpClass(mp){const m=(mp||'').toLowerCase();return m.includes('aip')?'aip':m.includes('fb')?'fb':m.includes('hb')?'hb':m.includes('bb')?'bb':'none';}
+
+function renderGuests(){
+  const q=state.search.toLowerCase();
+  const rows=state.guests.filter(g=>!q||(g.name+g.villa+g.confirmation).toLowerCase().includes(q));
+  document.getElementById('stats').innerHTML=`
+    <div class="stat"><div class="n">${state.guests.length}</div><div class="l">${state.listType}</div></div>
+    <div class="stat coral"><div class="n">${state.guests.filter(g=>g.hm).length}</div><div class="l">Honeymoon</div></div>
+    <div class="stat gold"><div class="n">${state.guests.filter(g=>g.anniversary).length}</div><div class="l">Anniversary</div></div>
+    <div class="stat"><div class="n">${state.guests.filter(g=>g.repeater).length}</div><div class="l">Repeater</div></div>`;
+  const tb=document.getElementById('gbody');
+  const rowHtml=(g)=>`
+    <tr data-id="${g.id}">
+      <td><div class="flagwrap">
+        <span class="flag hm ${g.hm?'on':''}" data-f="hm" title="Honeymoon">♡</span>
+        <span class="flag an ${g.anniversary?'on':''}" data-f="anniversary" title="Anniversary">⚭</span>
+        <span class="flag rp ${g.repeater?'on':''}" data-f="repeater" title="Repeater">★</span>
+        ${g.repeater&&g.repeater_count?`<span class="stay-badge" title="Stay number">${esc(g.repeater_count)}</span>`:''}
+      </div></td>
+      <td><strong>${esc(g.villa)}</strong><div style="font-size:10px;color:var(--ink-soft)">${esc(g.villa_type||'')}</div></td>
+      <td>${esc(g.nationality||'—')}</td>
+      <td>${esc(g.arrival||'')}</td>
+      <td>${esc(g.departure||'')}</td>
+      <td><span class="badge ${mpClass(g.meal_plan)}">${esc(g.meal_plan||'—')}</span></td>
+      <td class="name-cell">${esc(g.name)}</td>
+      <td class="remarks-cell" title="${esc(g.remarks||'')}">${esc((g.remarks||'').slice(0,40))}${(g.remarks||'').length>40?'…':''}</td>
+      <td class="conf-cell">${esc(g.confirmation)}</td>
+      <td><span class="doc-count" data-id="${g.id}">·</span></td>
+      <td style="white-space:nowrap">
+        ${state.listType==='arrival'?`<button class="btn btn-coral btn-sm" data-checkin="${g.id}" style="margin-right:4px">Check In</button>`:''}
+        ${(state.listType==='inhouse'||state.listType==='departure')?`<button class="btn btn-coral btn-sm" data-checkout="${g.id}" style="margin-right:4px">Check Out</button>`:''}
+        ${state.listType==='departure'?`<button class="btn btn-gold btn-sm" data-depletter="${g.id}" style="margin-right:4px">Letter</button>`:''}
+        ${(state.listType==='checkedout'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" data-undo="${g.id}" style="margin-right:4px">Undo</button>`:''}
+        <button class="linkbtn" data-open="${g.id}">Open</button></td>
+    </tr>`;
+  const sectionRow=(label,cls)=>`<tr class="sec-row ${cls}"><td colspan="11">${label}</td></tr>`;
+
+  if(!rows.length){
+    tb.innerHTML=`<tr><td colspan="11"><div class="empty">No ${state.listType==='checkedout'?'checked-out':state.listType} guests yet. ${state.listType==='arrival'?'Use “Import Arrivals”.':''}</div></td></tr>`;
+  } else if(state.listType==='departure'){
+    // three stacked sections: Today, Tomorrow, Overdue
+    const groups=[
+      {key:'today',label:'Departing Today',cls:'today'},
+      {key:'tomorrow',label:'Departing Tomorrow',cls:'tomorrow'},
+      {key:'overdue',label:'Overdue — not yet checked out',cls:'overdue'},
+    ];
+    let html='';
+    groups.forEach(grp=>{
+      const gr=rows.filter(g=>g.dueGroup===grp.key);
+      if(gr.length){html+=sectionRow(`${grp.label} (${gr.length})`,grp.cls)+gr.map(rowHtml).join('');}
     });
-    return res.json({ ok: true, created: true });
-  }
-  db.prepare(`UPDATE templates SET
-    category=@category,label=@label,intro=@intro,lead=@lead,body_json=@body,
-    closing=@closing,contact=@contact,note=@note,signoff=@signoff,signatory=@signatory,
-    has_date=@has_date,date_label=@date_label,top_date=@top_date,updated_at=datetime('now')
-    WHERE template_key=@k AND lang=@lang`).run({
-    k: req.params.key, lang, category: b.category ?? existing.category, label: b.label ?? existing.label,
-    intro: b.intro ?? existing.intro, lead: b.lead ?? existing.lead,
-    body: JSON.stringify(b.body ?? safeJSON(existing.body_json)),
-    closing: b.closing ?? existing.closing, contact: b.contact ?? existing.contact,
-    note: b.note ?? existing.note, signoff: b.signoff ?? existing.signoff,
-    signatory: b.signatory ?? existing.signatory,
-    has_date: (b.hasDate ?? existing.has_date) ? 1 : 0, date_label: b.dateLabel ?? existing.date_label,
-    top_date: (b.topDate ?? existing.top_date) ? 1 : 0,
-  });
-  res.json({ ok: true });
-});
-
-// Duplicate a template into a brand new key.
-app.post("/api/manage/templates/:key/duplicate", auth, canManageTemplates, (req, res) => {
-  const en = db.prepare("SELECT * FROM templates WHERE template_key=? AND lang='en'").get(req.params.key);
-  if (!en) return res.status(404).json({ error: "Template not found" });
-  let key = slugify((en.label || "copy") + " copy"), base = key, n = 1;
-  while (db.prepare("SELECT 1 FROM templates WHERE template_key=? AND lang='en'").get(key)) key = base + "_" + (++n);
-  const maxOrder = db.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM templates").get().m;
-  db.prepare(`INSERT INTO templates
-    (template_key,lang,category,label,intro,lead,body_json,closing,contact,note,
-     signoff,signatory,has_date,date_label,top_date,sort_order,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    key, "en", en.category, en.label + " (copy)", en.intro, en.lead, en.body_json,
-    en.closing, en.contact, en.note, en.signoff, en.signatory, en.has_date,
-    en.date_label, en.top_date, maxOrder + 1, req.user.id);
-  res.json({ template_key: key });
-});
-
-// Archive / unarchive (keeps history; existing documents still export).
-app.post("/api/manage/templates/:key/archive", auth, canManageTemplates, (req, res) => {
-  const v = req.body.archived ? 1 : 0;
-  db.prepare("UPDATE templates SET archived=?, updated_at=datetime('now') WHERE template_key=?").run(v, req.params.key);
-  res.json({ ok: true });
-});
-
-// Reorder (accepts array of template_keys in desired order).
-app.post("/api/manage/templates/reorder", auth, canManageTemplates, (req, res) => {
-  const order = req.body.order || [];
-  const upd = db.prepare("UPDATE templates SET sort_order=? WHERE template_key=?");
-  const tx = db.transaction((arr) => arr.forEach((k, i) => upd.run(i, k)));
-  tx(order);
-  res.json({ ok: true });
-});
-
-// Signatory management
-app.get("/api/manage/signatories", auth, canManageTemplates, (req, res) => res.json(getSignatories()));
-app.post("/api/manage/signatories", auth, canManageTemplates, (req, res) => {
-  const { key, name, title } = req.body || {};
-  if (!key || !name) return res.status(400).json({ error: "key & name required" });
-  const max = db.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM signatories").get().m;
-  db.prepare("INSERT OR REPLACE INTO signatories (key,name,title,sort_order) VALUES (?,?,?,?)")
-    .run(slugify(key), name, title || "", max + 1);
-  res.json({ ok: true });
-});
-app.delete("/api/manage/signatories/:key", auth, canManageTemplates, (req, res) => {
-  db.prepare("DELETE FROM signatories WHERE key=?").run(req.params.key);
-  res.json({ ok: true });
-});
-
-function safeJSON(s) { try { return JSON.parse(s); } catch { return []; } }
-
-// ============================================================================
-//  BUSINESS DAYS
-// ============================================================================
-app.get("/api/days", auth, (req, res) => {
-  res.json(db.prepare("SELECT * FROM business_days ORDER BY the_date DESC").all());
-});
-app.post("/api/days", auth, (req, res) => {
-  const date = String(req.body.date || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-  try {
-    const info = db.prepare("INSERT INTO business_days (the_date) VALUES (?)").run(date);
-    res.json({ id: info.lastInsertRowid, the_date: date, status: "open" });
-  } catch {
-    const existing = db.prepare("SELECT * FROM business_days WHERE the_date=?").get(date);
-    res.json(existing);
-  }
-});
-app.post("/api/days/:id/close", auth, (req, res) => {
-  db.prepare("UPDATE business_days SET status='closed' WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
-});
-
-// ============================================================================
-//  IMPORT  (tab-delimited Opera exports)
-// ============================================================================
-function rowToGuestInsert(g, dayId, listType) {
-  return db.prepare(`INSERT INTO guests
-    (day_id,list_type,villa,villa_type,arrival,departure,meal_plan,nationality,
-     confirmation,name,guests_json,adults,children,hm,anniversary,repeater,
-     special_requests,suggested_vouchers,remarks)
-    VALUES (@day_id,@list_type,@villa,@villa_type,@arrival,@departure,@meal_plan,
-     @nationality,@confirmation,@name,@guests_json,@adults,@children,@hm,
-     @anniversary,@repeater,@special_requests,@suggested_vouchers,@remarks)`)
-    .run({
-      day_id: dayId, list_type: listType,
-      villa: g.villa || "", villa_type: g.villaType || "",
-      arrival: g.arrival || "", departure: g.departure || "",
-      meal_plan: g.mealPlan || "", nationality: g.nationality || "",
-      confirmation: g.confirmation || "", name: g.name || "",
-      guests_json: JSON.stringify(g.guests || []),
-      adults: g.adults || 1, children: g.children || 0,
-      hm: g.hm ? 1 : 0, anniversary: g.anniversary ? 1 : 0, repeater: g.repeater ? 1 : 0,
-      special_requests: g.specialRequests || "",
-      suggested_vouchers: JSON.stringify(g.suggestedVouchers || []),
-      remarks: "",
-    });
-}
-
-app.post("/api/import", auth, (req, res) => {
-  const { dayId, text } = req.body || {};
-  if (!dayId || !text) return res.status(400).json({ error: "dayId & text required" });
-  const day = db.prepare("SELECT * FROM business_days WHERE id=?").get(dayId);
-  if (!day) return res.status(404).json({ error: "Day not found" });
-
-  // Arrivals only. Departures are now derived automatically from the
-  // departure date of in-house guests, so there's no departure import.
-  const parsed = P.parseArrivals(text);
-  const listType = "arrival";
-
-  const insertMany = db.transaction((items) => {
-    let n = 0;
-    for (const g of items) {
-      const exists = db.prepare(
-        "SELECT id FROM guests WHERE day_id=? AND list_type=? AND confirmation=?"
-      ).get(dayId, listType, g.confirmation);
-      if (exists) continue;
-      rowToGuestInsert(g, dayId, listType);
-      n++;
-    }
-    return n;
-  });
-  const added = insertMany(parsed);
-  res.json({ parsed: parsed.length, added, listType });
-});
-
-// ============================================================================
-//  GUESTS
-// ============================================================================
-// Convert a stored display date (e.g. "18-Mar-2026") to a YYYY-MM-DD for compare
-function toISO(d) {
-  if (!d) return "";
-  const m = String(d).match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
-  if (!m) return "";
-  const months = { jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12" };
-  const mm = months[m[2].toLowerCase()]; if (!mm) return "";
-  return `${m[3]}-${mm}-${m[1].padStart(2,"0")}`;
-}
-// Resort timezone offset in hours (Maldives = UTC+5). Override with TZ_OFFSET
-// env var if ever needed. This keeps "today"/"tomorrow" correct no matter
-// what timezone the server runs in (e.g. Render runs UTC).
-const TZ_OFFSET_HOURS = process.env.TZ_OFFSET ? Number(process.env.TZ_OFFSET) : 5;
-function localNow() { return new Date(Date.now() + TZ_OFFSET_HOURS * 3600000); }
-function todayISO() { return localNow().toISOString().slice(0, 10); }
-function tomorrowISO() { return new Date(localNow().getTime() + 86400000).toISOString().slice(0, 10); }
-// Add N days to a YYYY-MM-DD string
-function addDays(iso, n) {
-  const d = new Date(iso + "T00:00:00Z");
-  return new Date(d.getTime() + n * 86400000).toISOString().slice(0, 10);
-}
-// The reference "today" for all date logic is the SELECTED BUSINESS DAY, not
-// the real clock. Resolve it from the dayId; fall back to the real local date.
-function refDateForDay(dayId) {
-  if (dayId) {
-    const d = db.prepare("SELECT the_date FROM business_days WHERE id=?").get(dayId);
-    if (d && d.the_date) return d.the_date;
-  }
-  return todayISO();
-}
-
-app.get("/api/guests", auth, (req, res) => {
-  const { dayId, listType, q } = req.query;
-  const today = refDateForDay(dayId);
-  const tomorrow = addDays(today, 1);
-
-  // Base query — we post-filter the in-house/departure/active split in JS using
-  // the departure date, so guests flow automatically without manual moves.
-  let sql = "SELECT * FROM guests WHERE 1=1";
-  const params = [];
-  if (dayId && listType === "arrival") { sql += " AND day_id=?"; params.push(dayId); }
-  if (q) { sql += " AND (name LIKE ? OR villa LIKE ? OR confirmation LIKE ?)";
-    params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-  sql += " ORDER BY CAST(villa AS INTEGER), villa";
-  let rows = db.prepare(sql).all(...params).map(hydrateGuest);
-
-  rows = rows.filter((g) => {
-    const depISO = toISO(g.departure);
-    const isCheckedOut = g.status === "departed";
-    if (listType === "arrival") {
-      return g.list_type === "arrival" && !isCheckedOut;
-    }
-    if (listType === "inhouse") {
-      // everyone currently in-house and not yet checked out
-      return g.list_type === "inhouse" && !isCheckedOut;
-    }
-    if (listType === "departure") {
-      // due out relative to the SELECTED BUSINESS DAY
-      if (g.list_type !== "inhouse" || isCheckedOut) return false;
-      if (!depISO) return false;
-      if (depISO < today) g.dueGroup = "overdue";
-      else if (depISO === today) g.dueGroup = "today";
-      else if (depISO === tomorrow) g.dueGroup = "tomorrow";
-      else return false;
-      return true;
-    }
-    if (listType === "checkedout") {
-      return isCheckedOut;
-    }
-    return true;
-  });
-  res.json(rows);
-});
-
-app.get("/api/guests/:id", auth, (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  const docs = db.prepare("SELECT * FROM documents WHERE guest_id=? ORDER BY id").all(g.id);
-  res.json({ guest: hydrateGuest(g), documents: docs.map(hydrateDoc) });
-});
-
-app.put("/api/guests/:id", auth, (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  const isAdmin = req.user.role === "admin";
-
-  // Per-field ownership (no blanket lock). These structural fields are
-  // admin-only; everything else (name, meal plan, nationality, remarks, flags)
-  // is editable by any logged-in staff member, including on in-house bookings.
-  const adminOnlyFields = ["arrival","departure","arrival_flight","departure_flight","villa","confirmation",
-    "transport_type","destination_type","luggage_time","checkout_time","transfer_time","next_destination","intl_flight_time"];
-  const allowed = ["villa","villa_type","arrival","departure","arrival_flight","departure_flight",
-    "meal_plan","nationality","confirmation","name","adults","children","hm","anniversary",
-    "repeater","repeater_count","remarks","list_type",
-    "transport_type","destination_type","luggage_time","checkout_time","transfer_time","next_destination","intl_flight_time"];
-
-  const sets = [], vals = [];
-  for (const k of allowed) {
-    if (k in req.body) {
-      if (adminOnlyFields.includes(k) && !isAdmin) continue; // staff can't touch admin fields
-      sets.push(`${k}=?`);
-      vals.push(typeof req.body[k] === "boolean" ? (req.body[k] ? 1 : 0) : req.body[k]);
-    }
-  }
-  if (req.body.guests) { sets.push("guests_json=?"); vals.push(JSON.stringify(req.body.guests)); }
-  if (!sets.length) return res.json({ ok: true });
-  vals.push(req.params.id);
-  db.prepare(`UPDATE guests SET ${sets.join(",")} WHERE id=?`).run(...vals);
-  res.json({ ok: true });
-});
-
-// Recompute formatted name from edited guest objects (name is staff-editable)
-app.post("/api/guests/:id/rebuild-name", auth, (req, res) => {
-  const guests = req.body.guests || [];
-  const childCount = guests.filter((x) => x.role === "child").length;
-  const name = P.buildName(guests, childCount);
-  db.prepare("UPDATE guests SET name=?, guests_json=? WHERE id=?")
-    .run(name, JSON.stringify(guests), req.params.id);
-  res.json({ name });
-});
-
-app.delete("/api/guests/:id", auth, (req, res) => {
-  if (req.user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-  db.prepare("DELETE FROM documents WHERE guest_id=?").run(req.params.id);
-  db.prepare("DELETE FROM guests WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
-});
-
-// ---- Check in an arrival -> moves to in-house ----------------------------
-// Staff can check in only on the actual arrival date; admin can override.
-app.post("/api/guests/:id/checkin", auth, (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  if (g.list_type === "inhouse") return res.json({ ok: true, already: true });
-
-  const isAdmin = req.user.role === "admin";
-  const arrISO = toISO(g.arrival);
-  const ref = refDateForDay(req.body.dayId);
-  if (!isAdmin && arrISO && arrISO !== ref) {
-    return res.status(403).json({ error: `Check-in is only allowed on the arrival date (${g.arrival}). Switch the business day to that date, or ask an admin.` });
-  }
-  db.prepare("UPDATE guests SET list_type='inhouse', checked_in_at=datetime('now') WHERE id=?").run(g.id);
-  res.json({ ok: true });
-});
-
-// ---- Check out a guest -> ends the stay (staff + admin) ------------------
-// Works any day: handles on-time, early, and overdue departures alike.
-app.post("/api/guests/:id/checkout", auth, (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.id);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  const isAdmin = req.user.role === "admin";
-  const depISO = toISO(g.departure);
-  const ref = refDateForDay(req.body.dayId);
-  if (!isAdmin && depISO && depISO !== ref) {
-    return res.status(403).json({ error: `Check-out is only allowed on the departure date (${g.departure}). Switch the business day to that date, or ask an admin.` });
-  }
-  db.prepare("UPDATE guests SET status='departed', checked_out_at=datetime('now') WHERE id=?").run(g.id);
-  res.json({ ok: true });
-});
-
-// ---- Undo a check-out (admin only) — restores to in-house ----------------
-app.post("/api/guests/:id/undo-checkout", auth, adminOnly, (req, res) => {
-  db.prepare("UPDATE guests SET status='active', checked_out_at=NULL WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
-});
-
-// ---- Admin: create a booking from scratch --------------------------------
-app.post("/api/guests", auth, adminOnly, (req, res) => {
-  const b = req.body || {};
-  const dayId = b.day_id || (db.prepare("SELECT id FROM business_days ORDER BY the_date DESC LIMIT 1").get() || {}).id;
-  const guests = b.guests || [{ title: "Mr", last: "", first: "", role: "adult" }];
-  const name = b.name || P.buildName(guests, guests.filter((x) => x.role === "child").length);
-  const info = db.prepare(`INSERT INTO guests
-    (day_id,list_type,villa,villa_type,arrival,departure,arrival_flight,departure_flight,
-     meal_plan,nationality,confirmation,name,guests_json,adults,children,
-     hm,anniversary,repeater,repeater_count,special_requests,suggested_vouchers,remarks,status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'active')`).run(
-    dayId, b.list_type || "arrival", b.villa || "", b.villa_type || "",
-    b.arrival || "", b.departure || "", b.arrival_flight || "", b.departure_flight || "",
-    b.meal_plan || "", b.nationality || "", b.confirmation || "", name,
-    JSON.stringify(guests), b.adults || 1, b.children || 0,
-    b.hm ? 1 : 0, b.anniversary ? 1 : 0, b.repeater ? 1 : 0, b.repeater_count || "",
-    "", JSON.stringify([]), b.remarks || "");
-  res.json({ id: info.lastInsertRowid });
-});
-
-// ============================================================================
-//  ALBUM  (in-house guests as individual people with photos + profiles)
-// ============================================================================
-// Returns one entry PER PERSON across all in-house bookings, ordered by villa
-// then person index (lead first), each merged with its profile row.
-app.get("/api/album", auth, (req, res) => {
-  const bookings = db.prepare(
-    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
-  ).all();
-  const profiles = db.prepare("SELECT * FROM guest_profiles").all();
-  const pIndex = {};
-  profiles.forEach((p) => { pIndex[`${p.guest_id}:${p.person_index}`] = p; });
-
-  const people = [];
-  for (const b of bookings) {
-    const list = safeParse(b.guests_json, []);
-    list.forEach((person, i) => {
-      const prof = pIndex[`${b.id}:${i}`] || {};
-      const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
-        || person.last || person.first || `Guest ${i + 1}`;
-      people.push({
-        guest_id: b.id, person_index: i,
-        villa: b.villa, villa_type: b.villa_type,
-        displayName: display, role: person.role || "adult",
-        title: person.title || "", first: person.first || "", last: person.last || "",
-        isLead: i === 0,
-        arrival: b.arrival, departure: b.departure,
-        bookingName: b.name,
-        photo: prof.photo || null,
-        hasProfile: !!(prof.allergies || prof.likes || prof.occasions || prof.comments || prof.history),
-      });
-    });
-  }
-  res.json(people);
-});
-
-// Get one person's full profile (incl. photo)
-app.get("/api/album/:guestId/:personIndex", auth, (req, res) => {
-  const { guestId, personIndex } = req.params;
-  const booking = db.prepare("SELECT * FROM guests WHERE id=?").get(guestId);
-  if (!booking) return res.status(404).json({ error: "Booking not found" });
-  const list = safeParse(booking.guests_json, []);
-  const person = list[personIndex] || {};
-  const prof = db.prepare("SELECT * FROM guest_profiles WHERE guest_id=? AND person_index=?")
-    .get(guestId, personIndex) || {};
-  const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
-    || person.last || person.first || `Guest ${Number(personIndex) + 1}`;
-  res.json({
-    guest_id: Number(guestId), person_index: Number(personIndex),
-    displayName: display, role: person.role || "adult", isLead: Number(personIndex) === 0,
-    title: person.title || "", first: person.first || "", last: person.last || "",
-    villa: booking.villa, villa_type: booking.villa_type,
-    arrival: booking.arrival, departure: booking.departure,
-    bookingName: booking.name, meal_plan: booking.meal_plan,
-    hm: !!booking.hm, anniversary: !!booking.anniversary, repeater: !!booking.repeater,
-    repeater_count: booking.repeater_count,
-    photo: prof.photo || null,
-    allergies: prof.allergies || "", likes: prof.likes || "",
-    occasions: prof.occasions || "", comments: prof.comments || "",
-    history: prof.history || "",
-  });
-});
-
-// Upsert a person's profile fields and/or photo
-function upsertProfile(guestId, personIndex, patch) {
-  const existing = db.prepare("SELECT id FROM guest_profiles WHERE guest_id=? AND person_index=?")
-    .get(guestId, personIndex);
-  const fields = ["photo","allergies","likes","occasions","comments","history"];
-  if (existing) {
-    const sets = [], vals = [];
-    fields.forEach((f) => { if (f in patch) { sets.push(`${f}=?`); vals.push(patch[f]); } });
-    if (!sets.length) return;
-    sets.push("updated_at=datetime('now')");
-    vals.push(guestId, personIndex);
-    db.prepare(`UPDATE guest_profiles SET ${sets.join(",")} WHERE guest_id=? AND person_index=?`).run(...vals);
+    tb.innerHTML=html||`<tr><td colspan="11"><div class="empty">No departures due today or tomorrow.</div></td></tr>`;
   } else {
-    db.prepare(`INSERT INTO guest_profiles
-      (guest_id,person_index,photo,allergies,likes,occasions,comments,history)
-      VALUES (?,?,?,?,?,?,?,?)`).run(
-      guestId, personIndex, patch.photo || null, patch.allergies || "", patch.likes || "",
-      patch.occasions || "", patch.comments || "", patch.history || "");
+    tb.innerHTML=rows.map(rowHtml).join('');
   }
-}
-
-app.put("/api/album/:guestId/:personIndex", auth, (req, res) => {
-  const { guestId, personIndex } = req.params;
-  const allowed = {};
-  ["photo","allergies","likes","occasions","comments","history"].forEach((f) => {
-    if (f in req.body) allowed[f] = req.body[f];
-  });
-  upsertProfile(Number(guestId), Number(personIndex), allowed);
-  res.json({ ok: true });
-});
-
-app.delete("/api/album/:guestId/:personIndex/photo", auth, (req, res) => {
-  upsertProfile(Number(req.params.guestId), Number(req.params.personIndex), { photo: null });
-  res.json({ ok: true });
-});
-
-// People (with photos) for grid exports. mode=inhouse (default) or mode=departure-tomorrow.
-app.get("/api/album-export", auth, (req, res) => {
-  const mode = req.query.mode || "inhouse";
-  const dayId = req.query.dayId;
-  let bookings;
-  const allInhouse = () => db.prepare(
-    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
-  ).all();
-  if (mode === "departure-tomorrow") {
-    const tmr = addDays(refDateForDay(dayId), 1);
-    bookings = allInhouse().filter((b) => toISO(b.departure) === tmr);
-  } else if (mode === "departure-today") {
-    const ref = refDateForDay(dayId);
-    bookings = allInhouse().filter((b) => toISO(b.departure) === ref);
-  } else {
-    bookings = allInhouse();
-  }
-  const profiles = db.prepare("SELECT * FROM guest_profiles").all();
-  const pIndex = {};
-  profiles.forEach((p) => { pIndex[`${p.guest_id}:${p.person_index}`] = p; });
-
-  const people = [];
-  for (const b of bookings) {
-    const list = safeParse(b.guests_json, []);
-    list.forEach((person, i) => {
-      const prof = pIndex[`${b.id}:${i}`] || {};
-      const display = [person.title, person.first, person.last].filter(Boolean).join(" ").trim()
-        || person.last || person.first || `Guest ${i + 1}`;
-      people.push({
-        villa: b.villa, displayName: display, isLead: i === 0,
-        title: person.title || "", first: person.first || "", last: person.last || "",
-        departure: b.departure, photo: prof.photo || null,
-      });
-    });
-  }
-  res.json(people);
-});
-
-function hydrateGuest(g) {
-  return {
-    ...g,
-    hm: !!g.hm, anniversary: !!g.anniversary, repeater: !!g.repeater,
-    guests: safeParse(g.guests_json, []),
-    suggested_vouchers: safeParse(g.suggested_vouchers, []),
-  };
-}
-function hydrateDoc(d) { return { ...d, fields: safeParse(d.fields_json, {}) }; }
-function safeParse(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
-
-// ============================================================================
-//  DOCUMENTS  (vouchers etc.)
-// ============================================================================
-app.post("/api/documents", auth, (req, res) => {
-  const { guest_id, template_id, signatory, fields, lang } = req.body || {};
-  const guest = db.prepare("SELECT * FROM guests WHERE id=?").get(guest_id);
-  const template = getTemplate(template_id, lang || "en");
-  if (!guest || !template) return res.status(400).json({ error: "Bad guest or template" });
-  const f = Object.assign({
-    name: guest.name,
-    confirmation: guest.confirmation,
-    date: "",
-  }, fields || {});
-  const info = db.prepare(`INSERT INTO documents
-    (guest_id,template_id,lang,signatory,fields_json,created_by)
-    VALUES (?,?,?,?,?,?)`)
-    .run(guest_id, template_id, lang || "en", signatory || template.signatory, JSON.stringify(f), req.user.id);
-  res.json({ id: info.lastInsertRowid });
-});
-
-app.put("/api/documents/:id", auth, (req, res) => {
-  const doc = db.prepare("SELECT * FROM documents WHERE id=?").get(req.params.id);
-  if (!doc) return res.status(404).json({ error: "Not found" });
-  const fields = req.body.fields || safeParse(doc.fields_json, {});
-  const signatory = req.body.signatory || doc.signatory;
-  const lang = req.body.lang || doc.lang;
-  db.prepare("UPDATE documents SET fields_json=?, signatory=?, lang=?, updated_at=datetime('now') WHERE id=?")
-    .run(JSON.stringify(fields), signatory, lang, req.params.id);
-  res.json({ ok: true });
-});
-
-app.delete("/api/documents/:id", auth, (req, res) => {
-  db.prepare("DELETE FROM documents WHERE id=?").run(req.params.id);
-  res.json({ ok: true });
-});
-
-// Full document detail for the per-document editor: base template content
-// merged with any per-document override, plus the fields.
-app.get("/api/documents/:id/full", auth, (req, res) => {
-  const doc = db.prepare("SELECT * FROM documents WHERE id=?").get(req.params.id);
-  if (!doc) return res.status(404).json({ error: "Not found" });
-  const base = getTemplate(doc.template_id, doc.lang || "en");
-  if (!base) return res.status(404).json({ error: "Template no longer exists" });
-  const fields = safeParse(doc.fields_json, {});
-  const resolved = applyOverride(base, fields.override);
-  res.json({
-    id: doc.id, template_id: doc.template_id, lang: doc.lang,
-    signatory: doc.signatory, status: doc.status,
-    fields, base, resolved,
-    hasOverride: !!fields.override,
-  });
-});
-
-app.get("/api/documents", auth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT d.*, g.name guest_name, g.villa, g.confirmation conf
-    FROM documents d JOIN guests g ON g.id=d.guest_id
-    ORDER BY d.updated_at DESC`).all();
-  res.json(rows.map(hydrateDoc));
-});
-
-// ---- Export a document to docx or pdf ------------------------------------
-app.get("/api/documents/:id/export", auth, async (req, res) => {
-  const format = (req.query.format || "pdf").toLowerCase();
-  const doc = db.prepare("SELECT * FROM documents WHERE id=?").get(req.params.id);
-  if (!doc) return res.status(404).json({ error: "Not found" });
-  const baseTemplate = getTemplate(doc.template_id, doc.lang || "en");
-  if (!baseTemplate) return res.status(404).json({ error: "Template no longer exists" });
-  const fields = safeParse(doc.fields_json, {});
-
-  // Per-document content overrides: when this guest's document has edited the
-  // letter text, those edits live in fields.override and replace the template's
-  // text for THIS document only (the shared template is untouched).
-  const template = applyOverride(baseTemplate, fields.override);
-
-  const data = { ...fields, signatoryKey: doc.signatory, signatories: getSignatories(), lang: doc.lang || "en" };
-
-  const safe = (fields.name || "voucher").replace(/[^a-z0-9]+/gi, "_").slice(0, 40);
-  const base = `${template.id}_${safe}_${doc.id}`;
-  const docxPath = path.join(OUT_DIR, base + ".docx");
-
-  try {
-    await generateDocx(template, data, docxPath);
-    db.prepare("UPDATE documents SET status='exported', updated_at=datetime('now') WHERE id=?").run(doc.id);
-    if (format === "docx") return res.download(docxPath, base + ".docx");
-    const pdfPath = await convertToPdf(docxPath, OUT_DIR);
-    return res.download(pdfPath, base + ".pdf");
-  } catch (e) {
-    console.error("export error", e);
-    res.status(500).json({ error: "Export failed: " + e.message });
-  }
-});
-
-// Merge a per-document override object onto a template (non-destructive copy).
-function applyOverride(tpl, ov) {
-  if (!ov) return tpl;
-  const out = { ...tpl };
-  ["intro","lead","closing","contact","note","signoff","dateLabel"].forEach((k) => {
-    if (typeof ov[k] === "string") out[k] = ov[k];
-  });
-  if (Array.isArray(ov.body)) out.body = ov.body;
-  return out;
-}
-
-// ============================================================================
-//  DEPARTURE LETTERS
-// ============================================================================
-// Merge any per-letter overrides (transport/destination/times) onto the guest
-// before building, so the letter can be tweaked at generation time.
-function guestForLetter(g, ov) {
-  const o = ov || {};
-  return {
-    ...g,
-    transport_type: o.transport_type || g.transport_type || "seaplane",
-    destination_type: o.destination_type || g.destination_type || "international",
-    luggage_time: o.luggage_time != null ? o.luggage_time : g.luggage_time,
-    checkout_time: o.checkout_time != null ? o.checkout_time : g.checkout_time,
-    transfer_time: o.transfer_time != null ? o.transfer_time : g.transfer_time,
-    next_destination: o.next_destination != null ? o.next_destination : g.next_destination,
-    departure_flight: o.departure_flight != null ? o.departure_flight : g.departure_flight,
-    intl_flight_time: o.intl_flight_time != null ? o.intl_flight_time : g.intl_flight_time,
-    departure_signatory: o.signatory || g.departure_signatory,
-  };
-}
-
-// Preview a departure letter as plain text (for the editor preview)
-app.post("/api/departure-letter/:guestId/preview", auth, (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.guestId);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  const body = req.body || {};
-  const merged = guestForLetter(g, body.fields);
-  let tpl = buildDepartureTemplate(merged, body.printDate || todayISO());
-  if (body.fields && body.fields.override) tpl = applyOverride(tpl, body.fields.override);
-  const sigs = getSignatories();
-  const sig = sigs[(body.fields && body.fields.signatory) || tpl.signatory] || Object.values(sigs)[0] || { name: "", title: "" };
-  const lines = [];
-  if (tpl.topDateText) lines.push(tpl.topDateText);
-  lines.push(`Dear ${(body.fields && body.fields.name) || g.name},`);
-  (tpl.body || []).forEach((b) => lines.push(b.replace(/\*\*/g, "").replace(/_/g, "")));
-  if (tpl.note) lines.push(tpl.note);
-  lines.push(tpl.signoff, sig.name, sig.title, tpl.resortLine);
-  res.json({ text: lines.filter(Boolean).join("\n\n"), template: tpl });
-});
-
-// Export a single departure letter (docx/pdf)
-app.get("/api/departure-letter/:guestId/export", auth, async (req, res) => {
-  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.guestId);
-  if (!g) return res.status(404).json({ error: "Not found" });
-  const format = (req.query.format || "pdf").toLowerCase();
-  // The date on the letter is the actual day it is printed (real today),
-  // NOT the business day / departure date.
-  const printDate = req.query.printDate || todayISO();
-  const overrides = safeParse(decodeURIComponent(req.query.ov || "%7B%7D"), {});
-  const merged = guestForLetter(g, overrides);
-  let tpl = buildDepartureTemplate(merged, printDate);
-  if (overrides.override) tpl = applyOverride(tpl, overrides.override);
-  const data = {
-    name: (overrides.name) || g.name,
-    confirmation: "",
-    signatoryKey: overrides.signatory || tpl.signatory,
-    signatories: getSignatories(), lang: "en",
-  };
-  const safe = (data.name || "guest").replace(/[^a-z0-9]+/gi, "_").slice(0, 40);
-  const base = `departure_${g.villa || ""}_${safe}_${g.id}`;
-  const docxPath = path.join(OUT_DIR, base + ".docx");
-  try {
-    await generateDocx(tpl, data, docxPath);
-    if (format === "docx") return res.download(docxPath, base + ".docx");
-    const pdfPath = await convertToPdf(docxPath, OUT_DIR);
-    return res.download(pdfPath, base + ".pdf");
-  } catch (e) {
-    console.error("departure export error", e);
-    res.status(500).json({ error: "Export failed: " + e.message });
-  }
-});
-
-// Export ALL departure letters for a group (today/tomorrow) as one combined file
-app.get("/api/departure-letters/export-all", auth, async (req, res) => {
-  const when = req.query.when || "today";   // today | tomorrow
-  const format = (req.query.format || "pdf").toLowerCase();
-  // 'target' selects WHICH guests (their departure date), based on business day.
-  const ref = refDateForDay(req.query.dayId);
-  const target = when === "tomorrow" ? addDays(ref, 1) : ref;
-  // 'printDate' is what prints on the letter = the actual day of printing (today).
-  const printDate = req.query.printDate || todayISO();
-  const bookings = db.prepare(
-    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
-  ).all().filter((b) => toISO(b.departure) === target);
-  if (!bookings.length) return res.status(404).json({ error: "No departures for " + when });
-
-  const sigs = getSignatories();
-  const items = bookings.map((g) => {
-    const merged = guestForLetter(g, null);
-    const tpl = buildDepartureTemplate(merged, printDate);
-    return { template: tpl, data: { name: g.name, confirmation: "", signatoryKey: tpl.signatory, signatories: sigs, lang: "en" } };
-  });
-  const base = `departure_letters_${when}_${printDate}`;
-  const docxPath = path.join(OUT_DIR, base + ".docx");
-  try {
-    await generateMultiDocx(items, docxPath);
-    if (format === "docx") return res.download(docxPath, base + ".docx");
-    const pdfPath = await convertToPdf(docxPath, OUT_DIR);
-    return res.download(pdfPath, base + ".pdf");
-  } catch (e) {
-    console.error("departure export-all error", e);
-    res.status(500).json({ error: "Export failed: " + e.message });
-  }
-});
-
-// Live preview (returns plain text rendering of the filled letter)
-app.post("/api/preview", auth, (req, res) => {
-  const { template_id, fields, lang, template: inlineTpl } = req.body || {};
-  // allow previewing an unsaved builder draft via inlineTpl
-  let t = inlineTpl || getTemplate(template_id, lang || "en");
-  if (!t) return res.status(400).json({ error: "Bad template" });
-  const f = fields || {};
-  t = applyOverride(t, f.override);   // reflect per-document edits in the preview
-  const sigs = getSignatories();
-  const lines = [];
-  if (t.topDate && f.date) lines.push(f.date);
-  lines.push(`Dear ${f.name || "[name]"},`);
-  if (t.intro) lines.push(t.intro);
-  if (t.lead) lines.push(t.lead);
-  for (const b of t.body || []) {
-    let line = b;
-    if (line.includes("{{date}}")) {
-      line = line.replace("{{date}}", f.date ? `${t.dateLabel ? t.dateLabel + " " : ""}${f.date}` : "");
-      if (!line.trim()) continue;
+  tb.querySelectorAll('.flag').forEach(f=>f.onclick=async(e)=>{
+    const id=e.target.closest('tr').dataset.id;const g=state.guests.find(x=>x.id==id);
+    const field=f.dataset.f;g[field]=!g[field];
+    const patch={[field]:g[field]};
+    if(field==='repeater'&&g[field]){
+      const n=prompt('Which stay is this for the guest? (e.g. "2nd", "5th")', g.repeater_count||'');
+      if(n!==null){g.repeater_count=n.trim();patch.repeater_count=g.repeater_count;}
     }
-    line = line.replace("{{name}}", f.name || "").replace("{{confirmation}}", f.confirmation || "").replace("{{villa}}", f.villa || "");
-    lines.push(line.replace(/\*\*/g, "").replace(/_/g, ""));
+    if(field==='repeater'&&!g[field]){g.repeater_count='';patch.repeater_count='';}
+    try{await api.put('/api/guests/'+id,patch);}catch(err){toast(err.message);await loadGuests();return;}
+    renderGuests();
+  });
+  tb.querySelectorAll('[data-checkin]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Check in this villa? It will move to In-House.'))return;
+    try{await api.post('/api/guests/'+b.dataset.checkin+'/checkin',{dayId:state.dayId});toast('Checked in');await loadGuests();}
+    catch(err){toast(err.message);}
+  });
+  tb.querySelectorAll('[data-checkout]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Check out this guest? They will move to the Checked Out list.'))return;
+    try{await api.post('/api/guests/'+b.dataset.checkout+'/checkout',{dayId:state.dayId});toast('Checked out');await loadGuests();}
+    catch(err){toast(err.message);}
+  });
+  tb.querySelectorAll('[data-undo]').forEach(b=>b.onclick=async()=>{
+    try{await api.post('/api/guests/'+b.dataset.undo+'/undo-checkout');toast('Restored to In-House');await loadGuests();}
+    catch(err){toast(err.message);}
+  });
+  tb.querySelectorAll('[data-depletter]').forEach(b=>b.onclick=()=>openDepartureLetter(b.dataset.depletter));
+  tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
+  // load doc counts
+  rows.forEach(async g=>{
+    try{const d=await api.get('/api/guests/'+g.id);const c=d.documents.length;
+      const el=document.querySelector(`.doc-count[data-id="${g.id}"]`);if(el)el.textContent=c?c:'·';}catch{}
+  });
+}
+
+/* ---------- GUEST PANEL ---------- */
+let panelGuest=null,panelDocs=[];
+async function openGuest(id){
+  const d=await api.get('/api/guests/'+id);panelGuest=d.guest;panelDocs=d.documents;
+  document.getElementById('pVilla').textContent='Villa '+(panelGuest.villa||'—');
+  document.getElementById('pSub').textContent=`${panelGuest.confirmation} · ${panelGuest.meal_plan||''} · ${panelGuest.list_type}`;
+  renderPanel();
+  document.getElementById('overlay').classList.add('open');document.getElementById('panel').classList.add('open');
+}
+function closePanel(){document.getElementById('overlay').classList.remove('open');document.getElementById('panel').classList.remove('open');loadGuests();}
+document.getElementById('panelClose').onclick=closePanel;document.getElementById('overlay').onclick=closePanel;
+
+function renderPanel(){
+  const g=panelGuest;
+  const body=document.getElementById('panelBody');
+  const byCat={};state.templates.forEach(t=>{(byCat[t.category]=byCat[t.category]||[]).push(t);});
+  const selectedIds=new Set(panelDocs.map(d=>d.template_id));
+  const adminDis=state.isAdmin?'':'disabled';                 // dates/flights/villa/conf admin-only
+  body.innerHTML=`
+    <div class="panel-actions">
+      ${(g.list_type==='inhouse'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckout">Check Out</button>`:''}
+      ${(g.list_type==='arrival'&&g.status!=='departed')?`<button class="btn btn-coral btn-sm" id="pCheckin">Check In</button>`:''}
+      ${(g.status==='departed'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" id="pUndo">Undo Check-Out</button>`:''}
+      ${(g.list_type==='inhouse'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" id="pExtend">Extend / Change Dates</button>`:''}
+      ${g.status==='departed'?`<span class="pill closed">Checked out</span>`:''}
+    </div>
+    <div class="toggle-row">
+      <div class="toggle hm ${g.hm?'on':''}" data-f="hm"><div class="ti">♡</div><div class="tl">Honeymoon</div></div>
+      <div class="toggle an ${g.anniversary?'on':''}" data-f="anniversary"><div class="ti">⚭</div><div class="tl">Anniversary</div></div>
+      <div class="toggle rp ${g.repeater?'on':''}" data-f="repeater"><div class="ti">★</div><div class="tl">Repeater</div></div>
+    </div>
+    <div class="field ${g.repeater?'':'hidden'}" id="stayWrap" style="margin-top:8px">
+      <label>Which stay is this? (manual — from guest profile notes)</label>
+      <input id="f_repeater_count" value="${esc(g.repeater_count||'')}" placeholder="e.g. 2nd, 5th">
+    </div>
+
+    <div class="section-title">Guest Details</div>
+    <div class="grid2">
+      <div class="field"><label>Villa ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_villa" value="${esc(g.villa)}" ${adminDis}></div>
+      <div class="field"><label>Nationality</label><input id="f_nationality" value="${esc(g.nationality||'')}" placeholder="manual entry"></div>
+      <div class="field"><label>Arrival ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival" value="${esc(g.arrival||'')}" ${adminDis}></div>
+      <div class="field"><label>Departure ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure" value="${esc(g.departure||'')}" ${adminDis}></div>
+      <div class="field"><label>Arrival Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_arrival_flight" value="${esc(g.arrival_flight||'')}" ${adminDis}></div>
+      <div class="field"><label>Departure Flight ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_departure_flight" value="${esc(g.departure_flight||'')}" ${adminDis}></div>
+      <div class="field"><label>Meal Plan</label><input id="f_meal_plan" value="${esc(g.meal_plan||'')}" placeholder="leave blank if unknown"></div>
+      <div class="field"><label>Confirmation ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_confirmation" value="${esc(g.confirmation)}" ${adminDis}></div>
+    </div>
+    <div class="field"><label>Remarks / Booking Notes</label>
+      <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical">${esc(g.remarks||'')}</textarea></div>
+
+    <div class="section-title">Departure Details <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(for the departure letter)</span></div>
+    <div class="grid2">
+      <div class="field"><label>Transport ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label>
+        <select id="f_transport_type" ${adminDis}>
+          <option value="seaplane" ${g.transport_type==='seaplane'?'selected':''}>Seaplane</option>
+          <option value="speedboat" ${g.transport_type==='speedboat'?'selected':''}>Speedboat</option>
+        </select></div>
+      <div class="field"><label>Destination ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label>
+        <select id="f_destination_type" ${adminDis}>
+          <option value="international" ${g.destination_type==='international'?'selected':''}>International flight</option>
+          <option value="local" ${g.destination_type==='local'?'selected':''}>Local (another resort/island)</option>
+        </select></div>
+      <div class="field"><label>Luggage Collection ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_luggage_time" value="${esc(g.luggage_time||'')}" placeholder="e.g. 09:30" ${adminDis}></div>
+      <div class="field"><label>Checkout Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_checkout_time" value="${esc(g.checkout_time||'')}" placeholder="e.g. 11:00" ${adminDis}></div>
+      <div class="field"><label>Seaplane/Speedboat Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_transfer_time" value="${esc(g.transfer_time||'')}" placeholder="e.g. 12:15" ${adminDis}></div>
+      <div class="field"><label>Intl Flight Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_intl_flight_time" value="${esc(g.intl_flight_time||'')}" placeholder="e.g. 18:25" ${adminDis}></div>
+      <div class="field" style="grid-column:1/-1"><label>Next Destination (if local) ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_next_destination" value="${esc(g.next_destination||'')}" placeholder="e.g. Gili Lankanfushi" ${adminDis}></div>
+    </div>
+
+    <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
+    <div class="preview" id="namePrev">${esc(g.name)}</div>
+    <div class="nameedit" id="nameEdit"></div>
+    <input id="f_name" type="hidden" value="${esc(g.name)}">
+    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="saveDetails">Save Details</button></div>
+
+    <div class="section-title">Vouchers &amp; Documents</div>
+    ${Object.keys(byCat).map(cat=>`
+      <div class="vcat">${cat}</div>
+      <div class="vgrid">
+        ${byCat[cat].map(t=>{
+          const sug=g.suggested_vouchers.includes(t.id);
+          const sel=selectedIds.has(t.id);
+          return `<div class="vopt ${sel?'sel':''}" data-tpl="${t.id}">
+            <span class="chk">${sel?'✓':''}</span>${esc(t.label)}
+            ${sug?'<span class="sug">suggested</span>':''}</div>`;
+        }).join('')}
+      </div>`).join('')}
+
+    <div class="section-title">Created Documents</div>
+    <div id="docList"></div>
+  `;
+
+  body.querySelectorAll('.toggle').forEach(t=>t.onclick=async()=>{
+    const f=t.dataset.f;g[f]=!g[f];t.classList.toggle('on');
+    if(f==='repeater'){document.getElementById('stayWrap').classList.toggle('hidden',!g[f]);}
+    await api.put('/api/guests/'+g.id,{[f]:g[f]});
+  });
+  buildNameEditor();const sd=document.getElementById('saveDetails');if(sd)sd.onclick=saveDetails;
+  body.querySelectorAll('.vopt').forEach(v=>v.onclick=()=>toggleVoucher(v.dataset.tpl,v));
+  renderDocList();
+  // panel action buttons
+  const pco=document.getElementById('pCheckout');if(pco)pco.onclick=async()=>{
+    if(!confirm('Check out this guest?'))return;
+    try{await api.post('/api/guests/'+g.id+'/checkout',{dayId:state.dayId});toast('Checked out');closePanel();}catch(e){toast(e.message);}};
+  const pci=document.getElementById('pCheckin');if(pci)pci.onclick=async()=>{
+    if(!confirm('Check in this villa? It will move to In-House.'))return;
+    try{await api.post('/api/guests/'+g.id+'/checkin',{dayId:state.dayId});toast('Checked in');closePanel();}catch(e){toast(e.message);}};
+  const pu=document.getElementById('pUndo');if(pu)pu.onclick=async()=>{
+    try{await api.post('/api/guests/'+g.id+'/undo-checkout');toast('Restored');closePanel();}catch(e){toast(e.message);}};
+  const pe=document.getElementById('pExtend');if(pe)pe.onclick=()=>{
+    const el=document.getElementById('f_departure');if(el){el.focus();el.scrollIntoView({behavior:'smooth',block:'center'});toast('Edit the Departure date, then Save Details');}};
+}
+
+function buildNameEditor(){
+  const g=panelGuest;const box=document.getElementById('nameEdit');
+  let guests=g.guests&&g.guests.length?g.guests:[{title:'Mr',last:'',first:'',role:'adult'}];
+  g.guests=guests;
+  box.innerHTML=guests.map((gu,i)=>`
+    <div class="grp">
+      <span class="tag">${gu.role==='child'?'Child':'Adult'}</span>
+      <select data-i="${i}" data-k="title">${['Mrs','Mr','Ms','Miss','Master','Dr'].map(t=>`<option ${gu.title===t?'selected':''}>${t}</option>`).join('')}</select>
+      <input data-i="${i}" data-k="last" value="${esc(gu.last)}" placeholder="Last">
+      <input data-i="${i}" data-k="first" value="${esc(gu.first)}" placeholder="First">
+      <button class="rm" data-rm="${i}">✕</button>
+    </div>`).join('')+`
+    <div style="display:flex;gap:6px;margin-top:4px">
+      <button class="btn btn-ghost btn-sm" id="addA" style="flex:1">+ Adult</button>
+      <button class="btn btn-ghost btn-sm" id="addC" style="flex:1">+ Child</button>
+    </div>`;
+  box.querySelectorAll('input,select').forEach(el=>el.oninput=async()=>{
+    const gu=guests[+el.dataset.i];gu[el.dataset.k]=el.value;
+    if(el.dataset.k==='title')gu.role=el.value==='Master'?'child':gu.role;
+    const r=await api.post('/api/guests/'+g.id+'/rebuild-name',{guests});
+    document.getElementById('namePrev').textContent=r.name;document.getElementById('f_name').value=r.name;g.name=r.name;
+  });
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{
+    guests.splice(+b.dataset.rm,1);const r=await api.post('/api/guests/'+g.id+'/rebuild-name',{guests});
+    g.name=r.name;buildNameEditor();document.getElementById('namePrev').textContent=r.name;document.getElementById('f_name').value=r.name;
+  });
+  document.getElementById('addA').onclick=()=>{guests.push({title:'Mr',last:'',first:'',role:'adult'});buildNameEditor();};
+  document.getElementById('addC').onclick=()=>{guests.push({title:'Master',last:'',first:'',role:'child'});buildNameEditor();};
+}
+
+async function saveDetails(){
+  const g=panelGuest;
+  const patch={};['villa','nationality','arrival','departure','arrival_flight','departure_flight','meal_plan','confirmation','name','remarks','repeater_count','transport_type','destination_type','luggage_time','checkout_time','transfer_time','intl_flight_time','next_destination'].forEach(k=>{
+    const el=document.getElementById('f_'+k);if(el&&!el.disabled)patch[k]=el.value;});
+  try{await api.put('/api/guests/'+g.id,patch);}catch(e){return toast(e.message);}
+  Object.assign(g,patch);toast('Saved');
+  document.getElementById('pSub').textContent=`${g.confirmation} · ${g.meal_plan||''} · ${g.list_type}`;
+}
+
+async function toggleVoucher(tplId,el){
+  const g=panelGuest;
+  const existing=panelDocs.find(d=>d.template_id===tplId);
+  if(existing){await api.del('/api/documents/'+existing.id);panelDocs=panelDocs.filter(d=>d.id!==existing.id);el.classList.remove('sel');el.querySelector('.chk').textContent='';}
+  else{const tpl=state.templates.find(t=>t.id===tplId);
+    const r=await api.post('/api/documents',{guest_id:g.id,template_id:tplId,signatory:tpl.signatory});
+    const d=await api.get('/api/guests/'+g.id);panelDocs=d.documents;el.classList.add('sel');el.querySelector('.chk').textContent='✓';}
+  renderDocList();
+}
+
+function renderDocList(){
+  const wrap=document.getElementById('docList');
+  if(!panelDocs.length){wrap.innerHTML='<p style="color:var(--ink-soft);font-size:12px">No documents yet — select vouchers above.</p>';return;}
+  wrap.innerHTML=panelDocs.map(d=>{
+    const tpl=state.templates.find(t=>t.id===d.template_id)||{label:d.template_id};
+    const f=d.fields||{};
+    const langObj=(state.languages||[]).find(l=>l.code===(d.lang||'en'));
+    const langBadge=(d.lang&&d.lang!=='en')?`<span class="doc-count" style="background:var(--gold-soft);color:var(--gold)">${langObj?esc(langObj.native):d.lang.toUpperCase()}</span>`:'';
+    return `<div class="doc" data-doc="${d.id}">
+      <div class="dh"><span class="dt">${esc(tpl.label)} ${langBadge}</span>
+        <span class="dstat ${d.status}">${d.status}</span></div>
+      <label class="mini-label">Name on voucher</label>
+      <input data-k="name" value="${esc(f.name||'')}">
+      ${tpl.hasDate?`<label class="mini-label">${esc(tpl.dateLabel||'Date')}</label><input data-k="date" value="${esc(f.date||'')}" placeholder="e.g. 27th May 2026 at 19:00 – 20:30">`:''}
+      <label class="mini-label">Signatory</label>
+      <select data-k="signatory">${Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${(d.signatory===k)?'selected':''}>${v.name} — ${v.title}</option>`).join('')}</select>
+      <div class="drow">
+        <button class="btn btn-primary btn-sm" data-preview="${d.id}">Preview &amp; Edit</button>
+        <button class="btn btn-ghost btn-sm" data-save="${d.id}">Save</button>
+        <button class="btn btn-gold btn-sm" data-exp="${d.id}" data-fmt="docx">⬇ Word</button>
+        <button class="btn btn-coral btn-sm" data-exp="${d.id}" data-fmt="pdf">⬇ PDF</button>
+        <button class="btn btn-ghost btn-sm" data-del="${d.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('[data-save]').forEach(b=>b.onclick=async()=>{
+    const card=b.closest('.doc');const id=b.dataset.save;
+    const fields={};card.querySelectorAll('[data-k]').forEach(el=>{if(el.dataset.k!=='signatory')fields[el.dataset.k]=el.value;});
+    const signatory=card.querySelector('[data-k="signatory"]').value;
+    fields.confirmation=panelGuest.confirmation;
+    await api.put('/api/documents/'+id,{fields,signatory});toast('Saved');
+    const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();
+  });
+  wrap.querySelectorAll('[data-preview]').forEach(b=>b.onclick=()=>openDocEditor(b.dataset.preview));
+  wrap.querySelectorAll('[data-exp]').forEach(b=>b.onclick=()=>{
+    window.open('/api/documents/'+b.dataset.exp+'/export?format='+b.dataset.fmt,'_blank');
+  });
+  wrap.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+    await api.del('/api/documents/'+b.dataset.del);
+    const d=await api.get('/api/guests/'+panelGuest.id);panelDocs=d.documents;renderDocList();renderPanel();
+  });
+}
+
+/* ---------- PER-DOCUMENT EDITOR (Preview & Edit) ---------- */
+let docDraft=null, docId=null, docMeta=null;
+
+async function openDocEditor(id){
+  docId=id;
+  const full=await api.get('/api/documents/'+id+'/full');
+  docMeta=full;
+  const r=full.resolved;
+  // draft holds the editable content + fields for THIS document
+  docDraft={
+    name:full.fields.name||'',
+    date:full.fields.date||'',
+    confirmation:full.fields.confirmation||panelGuest.confirmation||'',
+    signatory:full.signatory,
+    lang:full.lang||'en',
+    intro:r.intro||'', lead:r.lead||'', body:(r.body||[]).slice(),
+    closing:r.closing||'', contact:r.contact||'', note:r.note||'',
+    signoff:r.signoff||'Warmest regards,',
+    hasDate:r.hasDate, dateLabel:r.dateLabel||'', topDate:r.topDate,
+    label:r.label, template_id:full.template_id,
+  };
+  document.getElementById('docEditTitle').textContent='Edit: '+r.label;
+  renderDocEditor();
+  // restore voucher-editor button bindings (the departure-letter editor reuses
+  // this overlay and rebinds these, so re-establish them each time we open)
+  document.getElementById('docResetOverride').classList.remove('hidden');
+  document.getElementById('docExportWord').onclick=()=>exportFromEditor('docx');
+  document.getElementById('docExportPdf').onclick=()=>exportFromEditor('pdf');
+  document.getElementById('docEditSave').onclick=async()=>{await saveDocEdits();document.getElementById('docEditor').classList.remove('open');};
+  document.getElementById('docEditor').classList.add('open');
+}
+
+function renderDocEditor(){
+  const d=docDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  const langOpts=state.languages.map(l=>`<option value="${l.code}" ${d.lang===l.code?'selected':''}>${esc(l.en)} · ${esc(l.native)}</option>`).join('');
+  document.getElementById('docForm').innerHTML=`
+    <div class="doc-edit-note">Editing here changes <strong>only this guest's voucher</strong>. The master template stays unchanged. Use this to set timings, dates, or tweak wording for pre-confirmed bookings.</div>
+    <div class="tpl-field"><label>Language</label><select id="de_lang">${langOpts}</select>
+      <div class="hint">Switching language loads that language's template wording. If a language hasn't been translated yet, it falls back to English.</div></div>
+    <div class="tpl-field"><label>Guest Name on Voucher</label><input id="de_name" value="${esc(d.name)}"></div>
+    ${d.hasDate?`<div class="tpl-field"><label>${esc(d.dateLabel||'Date / Timing')}</label><input id="de_date" value="${esc(d.date)}" placeholder="e.g. 27th May 2026 at 19:00 – 20:30"></div>`:''}
+    <div class="tpl-field"><label>Opening (“Dear …,” is added automatically)</label><textarea id="de_intro">${esc(d.intro)}</textarea></div>
+    <div class="tpl-field"><label>Lead-in sentence</label><textarea id="de_lead">${esc(d.lead)}</textarea></div>
+    <div class="tpl-field"><label>Body lines</label><div id="de_body"></div>
+      <div class="insert-row"><button class="chipbtn" id="de_addLine">+ Add line</button></div>
+      <div class="hint">**bold**, _italic_, start a line with • for a bullet. Use {{date}} where the timing should appear.</div>
+    </div>
+    <div class="tpl-field"><label>Closing</label><textarea id="de_closing">${esc(d.closing)}</textarea></div>
+    <div class="tpl-field"><label>Contact line</label><textarea id="de_contact">${esc(d.contact)}</textarea></div>
+    <div class="tpl-field"><label>Footnote</label><textarea id="de_note">${esc(d.note)}</textarea></div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Sign-off</label><input id="de_signoff" value="${esc(d.signoff)}"></div>
+      <div class="tpl-field"><label>Signatory</label><select id="de_signatory">${sigOpts}</select></div>
+    </div>`;
+  renderDocBodyLines();
+  const map={de_name:'name',de_date:'date',de_intro:'intro',de_lead:'lead',de_closing:'closing',de_contact:'contact',de_note:'note',de_signoff:'signoff'};
+  Object.entries(map).forEach(([id,key])=>{const el=document.getElementById(id);if(el)el.oninput=()=>{d[key]=el.value;refreshDocPreview();};});
+  document.getElementById('de_signatory').onchange=e=>{d.signatory=e.target.value;refreshDocPreview();};
+  document.getElementById('de_lang').onchange=async e=>{
+    const newLang=e.target.value;
+    if(!confirm('Load the '+newLang.toUpperCase()+' template wording? Any unsaved text edits in this editor will be replaced (name, date and signatory are kept).')){
+      e.target.value=d.lang;return;
+    }
+    d.lang=newLang;
+    try{
+      const t=await api.get('/api/templates/'+d.template_id+'?lang='+newLang);
+      d.intro=t.intro||'';d.lead=t.lead||'';d.body=(t.body||[]).slice();
+      d.closing=t.closing||'';d.contact=t.contact||'';d.note=t.note||'';
+      d.signoff=t.signoff||'Warmest regards,';d.dateLabel=t.dateLabel||'';
+      renderDocEditor();
+    }catch(err){toast(err.message);}
+  };
+  document.getElementById('de_addLine').onclick=()=>{d.body.push('');renderDocBodyLines();refreshDocPreview();};
+  refreshDocPreview();
+}
+
+function renderDocBodyLines(){
+  const d=docDraft;const box=document.getElementById('de_body');
+  box.innerHTML=d.body.map((ln,i)=>`
+    <div class="body-line">
+      <textarea data-i="${i}" placeholder="Body text…">${esc(ln)}</textarea>
+      <button class="rm" data-rm="${i}">✕</button>
+    </div>`).join('');
+  box.querySelectorAll('textarea').forEach(t=>t.oninput=()=>{d.body[+t.dataset.i]=t.value;refreshDocPreview();});
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{d.body.splice(+b.dataset.rm,1);if(!d.body.length)d.body=[''];renderDocBodyLines();refreshDocPreview();});
+}
+
+function refreshDocPreview(){
+  const d=docDraft;const paper=document.getElementById('docPaper');
+  const sig=state.signatories[d.signatory]||{name:'',title:''};
+  const fill=s=>String(s).replace(/\{\{name\}\}/g,d.name||'').replace(/\{\{confirmation\}\}/g,d.confirmation||'').replace(/\{\{villa\}\}/g,panelGuest.villa||'');
+  let h='';
+  if(d.topDate&&d.date)h+=`<div class="pl" style="text-align:left">${esc(d.date)}</div>`;
+  h+=`<div class="pl">Dear ${esc(d.name||'[name]')},</div>`;
+  if(d.intro)h+=`<div class="pl">${fmtInline(fill(d.intro))}</div>`;
+  if(d.lead)h+=`<div class="pl">${fmtInline(fill(d.lead))}</div>`;
+  d.body.forEach(ln=>{
+    if(!ln)return;let line=ln;
+    if(line.includes('{{date}}')){line=line.replace('{{date}}',d.date?((d.dateLabel?d.dateLabel+' ':'')+d.date):'');if(!line.trim())return;}
+    line=fill(line);
+    const bullet=line.startsWith('•');const bold=/^\*\*.*\*\*$/.test(line.trim());const ital=/^_.*_$/.test(line.trim());
+    h+=`<div class="pl ${bullet?'bullet':''} ${bold?'b':''} ${ital?'i':''}">${fmtInline(line)}</div>`;
+  });
+  if(d.closing)h+=`<div class="pl">${fmtInline(fill(d.closing))}</div>`;
+  if(d.contact)h+=`<div class="pl">${fmtInline(fill(d.contact))}</div>`;
+  if(d.note)h+=`<div class="pl i">${fmtInline(fill(d.note))}</div>`;
+  h+=`<div class="pl" style="margin-top:24px">${esc(d.signoff||'')}</div>`;
+  h+=`<div class="pl">${esc(sig.name)}</div><div class="pl">${esc(sig.title)}</div>`;
+  if(d.confirmation)h+=`<div class="pl conf">${esc(d.confirmation)}</div>`;
+  paper.innerHTML=h;
+}
+
+function docDraftToPayload(){
+  const d=docDraft;
+  // build override (content) + fields (name/date/confirmation)
+  const override={intro:d.intro,lead:d.lead,body:d.body,closing:d.closing,contact:d.contact,note:d.note,signoff:d.signoff,dateLabel:d.dateLabel};
+  const fields={name:d.name,date:d.date,confirmation:d.confirmation,override};
+  return {fields,signatory:d.signatory,lang:d.lang};
+}
+
+async function saveDocEdits(){
+  try{await api.put('/api/documents/'+docId,docDraftToPayload());toast('Saved');
+    if(panelGuest){const g=await api.get('/api/guests/'+panelGuest.id);panelDocs=g.documents;renderDocList();}
+  }catch(e){toast(e.message);}
+}
+
+document.getElementById('docEditCancel').onclick=()=>document.getElementById('docEditor').classList.remove('open');
+document.getElementById('docEditSave').onclick=async()=>{await saveDocEdits();document.getElementById('docEditor').classList.remove('open');};
+document.getElementById('docResetOverride').onclick=async()=>{
+  if(!confirm('Revert this voucher to the template’s original wording? Your edits to this document will be removed.'))return;
+  // clear override but keep name/date
+  const fields={name:docDraft.name,date:docDraft.date,confirmation:docDraft.confirmation};
+  await api.put('/api/documents/'+docId,{fields,signatory:docDraft.signatory});
+  toast('Reverted to template');
+  document.getElementById('docEditor').classList.remove('open');
+  if(panelGuest){const g=await api.get('/api/guests/'+panelGuest.id);panelDocs=g.documents;renderDocList();}
+};
+async function exportFromEditor(fmt){
+  await saveDocEdits();                       // persist before exporting
+  window.open('/api/documents/'+docId+'/export?format='+fmt,'_blank');
+}
+document.getElementById('docExportWord').onclick=()=>exportFromEditor('docx');
+document.getElementById('docExportPdf').onclick=()=>exportFromEditor('pdf');
+
+/* ---------- ALBUM ---------- */
+let albumPeople=[];
+async function loadAlbum(){
+  albumPeople=await api.get('/api/album');
+  renderAlbum();
+}
+function renderAlbum(){
+  const q=(document.getElementById('albumSearch').value||'').toLowerCase();
+  const people=albumPeople.filter(p=>!q||(p.displayName+' '+p.villa).toLowerCase().includes(q));
+  document.getElementById('albumCount').textContent=`${people.length} guest${people.length===1?'':'s'}`;
+  const grid=document.getElementById('albumGrid');
+  if(!people.length){grid.innerHTML='<div class="empty" style="grid-column:1/-1">No in-house guests yet. Check in arrivals to populate the album.</div>';return;}
+  // group by villa
+  const byVilla={};people.forEach(p=>{(byVilla[p.villa]=byVilla[p.villa]||[]).push(p);});
+  const villaKeys=Object.keys(byVilla).sort((a,b)=>(parseInt(a)||0)-(parseInt(b)||0));
+  let html='';
+  villaKeys.forEach(vk=>{
+    html+=`<div class="vgroup">Villa ${esc(vk)}</div>`;
+    byVilla[vk].forEach(p=>{
+      const key=`${p.guest_id}:${p.person_index}`;
+      html+=`<div class="pcard">
+        <div class="ph" data-prof="${key}">
+          ${p.isLead?'<span class="lead-tag">Main</span>':''}
+          ${p.photo?`<img src="${p.photo}" alt="">`:`<span class="noimg">${esc((p.displayName[0]||'?').toUpperCase())}</span>`}
+        </div>
+        <div class="meta" data-prof="${key}">
+          <div class="pn">${esc(p.displayName)}</div>
+          <div class="pv">${p.isLead?'Main guest':esc(p.role==='child'?'Child':'Guest')}</div>
+        </div>
+        <div class="addbtn" data-add="${key}">${p.photo?'Change Photo':'＋ Add Photo'}</div>
+        ${p.photo?`<div class="addbtn" data-dl="${key}" style="margin-top:-6px;background:var(--sand-deep);color:var(--ink-soft)">⬇ Download</div>`:''}
+      </div>`;
+    });
+  });
+  grid.innerHTML=html;
+  grid.querySelectorAll('[data-add]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();startPhotoUpload(b.dataset.add);});
+  grid.querySelectorAll('[data-dl]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();const p=albumPeople.find(x=>`${x.guest_id}:${x.person_index}`===b.dataset.dl);if(p)downloadSinglePhoto(p);});
+  grid.querySelectorAll('[data-prof]').forEach(b=>b.onclick=()=>openProfile(b.dataset.prof));
+}
+document.getElementById('albumSearch').oninput=renderAlbum;
+document.getElementById('albumExport').onclick=()=>exportMenu('inhouse','In-House');
+document.getElementById('exportDepPics').onclick=()=>departureExportMenu();
+
+function departureExportMenu(){
+  openModal(`<h3>Export Departures</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Which departures, and in what format?</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-ghost btn-sm" id="depToday">Departures Today</button>
+      <button class="btn btn-ghost btn-sm" id="depTomorrow">Departures Tomorrow</button>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
+      document.getElementById('depToday').onclick=()=>{closeModal();exportMenu('departure-today','Departures Today');};
+      document.getElementById('depTomorrow').onclick=()=>{closeModal();exportMenu('departure-tomorrow','Departures Tomorrow');};
+    });
+}
+
+// Format chooser: grid PDF, grid PNG, or ZIP of individual photos
+function exportMenu(mode,title){
+  openModal(`<h3>Export ${esc(title)}</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Choose what to export.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-coral btn-sm" id="exPdf">⬇ Grid PDF</button>
+      <button class="btn btn-gold btn-sm" id="exPng">⬇ Grid PNG</button>
+      <button class="btn btn-primary btn-sm" id="exZip">⬇ All photos separately (ZIP)</button>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
+      document.getElementById('exPdf').onclick=()=>{closeModal();runGridExport(mode,title,'pdf');};
+      document.getElementById('exPng').onclick=()=>{closeModal();runGridExport(mode,title,'png');};
+      document.getElementById('exZip').onclick=()=>{closeModal();runZipExport(mode,title);};
+    });
+}
+
+function loadImg(src){return new Promise(res=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>res(null);i.src=src;});}
+
+async function runGridExport(mode,title,fmt){
+  toast('Preparing export…');
+  let people=await api.get('/api/album-export?mode='+mode+'&dayId='+state.dayId);
+  if(!people.length){return toast('No guests to export.');}
+
+  // layout: 4 columns, 3:4 cells, label band beneath each
+  const cols=4, cellW=300, photoH=400, labelH=70, gapX=24, gapY=28, padX=50, padTop=190, padBottom=50;
+  const rows=Math.ceil(people.length/cols);
+  const cellH=photoH+labelH;
+  const W=padX*2+cols*cellW+(cols-1)*gapX;
+  const H=padTop+rows*cellH+(rows-1)*gapY+padBottom;
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#ffffff';ctx.fillRect(0,0,W,H);
+
+  // header (centered)
+  ctx.textAlign='center';
+  ctx.fillStyle='#063e42';ctx.font='600 44px Georgia, serif';
+  ctx.fillText('Constance Halaveli — '+title,W/2,74);
+  const stamp=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  ctx.fillStyle='#6f675a';ctx.font='400 22px Georgia, serif';
+  ctx.fillText(stamp+'  ·  '+people.length+' guests',W/2,108);
+
+  for(let idx=0;idx<people.length;idx++){
+    const p=people[idx];
+    const r=Math.floor(idx/cols), c=idx%cols;
+    const x=padX+c*(cellW+gapX);
+    const y=padTop+r*(cellH+gapY);
+    // photo
+    ctx.fillStyle='#ece2cf';ctx.fillRect(x,y,cellW,photoH);
+    if(p.photo){const im=await loadImg(p.photo);if(im){
+      // cover-fit into cell
+      const s=Math.max(cellW/im.width,photoH/im.height);
+      const dw=im.width*s,dh=im.height*s;
+      ctx.save();ctx.beginPath();ctx.rect(x,y,cellW,photoH);ctx.clip();
+      ctx.drawImage(im,x+(cellW-dw)/2,y+(photoH-dh)/2,dw,dh);ctx.restore();
+    }} else {
+      ctx.fillStyle='#b8ab92';ctx.font='600 90px Georgia, serif';ctx.textAlign='center';
+      ctx.fillText((p.displayName[0]||'?').toUpperCase(),x+cellW/2,y+photoH/2+30);
+    }
+    // label band
+    ctx.fillStyle='#0a5e63';ctx.fillRect(x,y+photoH,cellW,labelH);
+    ctx.fillStyle='#ffffff';ctx.textAlign='center';
+    ctx.font='700 26px Georgia, serif';
+    ctx.fillText('Villa '+(p.villa||'—'),x+cellW/2,y+photoH+30);
+    ctx.font='400 20px Georgia, serif';
+    let nm=p.displayName;if(nm.length>26)nm=nm.slice(0,25)+'…';
+    ctx.fillText(nm,x+cellW/2,y+photoH+56);
   }
-  if (t.closing) lines.push(t.closing);
-  if (t.contact) lines.push(t.contact);
-  if (t.note) lines.push(t.note);
-  const sig = sigs[f.signatory || t.signatory] || Object.values(sigs)[0] || { name: "", title: "" };
-  lines.push(t.signoff || "Warmest regards,", sig.name, sig.title);
-  if (f.confirmation) lines.push(f.confirmation);
-  res.json({ text: lines.join("\n\n") });
-});
 
-// SPA fallback
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "..", "public", "index.html")));
+  const fname=('halaveli_'+title.toLowerCase().replace(/[^a-z0-9]+/g,'_')+'_'+stamp.replace(/ /g,'')).replace(/_+/g,'_');
+  if(fmt==='png'){
+    const a=document.createElement('a');a.href=cv.toDataURL('image/png');a.download=fname+'.png';a.click();
+    toast('PNG exported');
+  } else {
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({orientation:W>H?'landscape':'portrait',unit:'pt',format:[W,H]});
+    pdf.addImage(cv.toDataURL('image/jpeg',0.92),'JPEG',0,0,W,H);
+    pdf.save(fname+'.pdf');
+    toast('PDF exported');
+  }
+}
 
-app.listen(PORT, () => {
-  console.log(`\n  Halaveli GDMS running on http://localhost:${PORT}`);
-  console.log(`  Generated files: ${OUT_DIR}\n`);
+/* ---------- ZIP OF INDIVIDUAL PHOTOS ---------- */
+// Filename: "12 MR EDWARD JOHN" => room + TITLE + LAST + FIRST, uppercase.
+function photoFileName(p){
+  const parts=[p.villa||'', (p.title||'').toUpperCase(), (p.last||'').toUpperCase(), (p.first||'').toUpperCase()]
+    .map(s=>String(s).trim()).filter(Boolean);
+  let base=parts.join(' ').replace(/[\\/:*?"<>|]/g,'').trim();
+  if(!base)base=(p.displayName||'guest').toUpperCase();
+  return base;
+}
+// Make a 3:4 placeholder JPEG (data URL) with the guest's name on it.
+function placeholderPhoto(p){
+  const w=600,h=800;const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#ece2cf';ctx.fillRect(0,0,w,h);
+  ctx.fillStyle='#b8ab92';ctx.font='600 180px Georgia, serif';ctx.textAlign='center';
+  ctx.fillText((p.displayName[0]||'?').toUpperCase(),w/2,h/2-20);
+  ctx.fillStyle='#6f675a';ctx.font='400 34px Georgia, serif';
+  ctx.fillText('NO PHOTO',w/2,h/2+60);
+  ctx.fillStyle='#063e42';ctx.font='600 30px Georgia, serif';
+  let nm='Villa '+(p.villa||'—')+' · '+p.displayName;if(nm.length>34)nm=nm.slice(0,33)+'…';
+  ctx.fillText(nm,w/2,h-60);
+  return cv.toDataURL('image/jpeg',0.85);
+}
+function dataUrlToBlob(dataUrl){
+  const [head,b64]=dataUrl.split(',');const mime=head.match(/:(.*?);/)[1];
+  const bin=atob(b64);const len=bin.length;const arr=new Uint8Array(len);
+  for(let i=0;i<len;i++)arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type:mime});
+}
+
+async function runZipExport(mode,title){
+  toast('Building ZIP…');
+  const people=await api.get('/api/album-export?mode='+mode+'&dayId='+state.dayId);
+  if(!people.length){return toast('No guests to export.');}
+  const zip=new JSZip();
+  const stamp=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  const used={};
+  for(const p of people){
+    const dataUrl=p.photo||placeholderPhoto(p);
+    let name=photoFileName(p);
+    // avoid duplicate filenames
+    if(used[name]){used[name]++;name=name+' ('+used[name]+')';}else{used[name]=1;}
+    zip.file(name+'.jpg',dataUrlToBlob(dataUrl));
+  }
+  const folderName=`${title} - ${stamp}`;
+  const blob=await zip.generateAsync({type:'blob'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=folderName+'.zip';a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast('ZIP downloaded');
+}
+
+// Download a single guest's photo
+function downloadSinglePhoto(p){
+  if(!p.photo){return toast('No photo to download.');}
+  const a=document.createElement('a');a.href=p.photo;a.download=photoFileName(p)+'.jpg';a.click();
+}
+
+/* ---------- PHOTO UPLOAD + CROP ---------- */
+let cropState={img:null,scale:1,min:1,bright:100,angle:0,quarter:0,ox:0,oy:0,dragging:false,lastX:0,lastY:0,targetKey:null};
+const CROP_W=300, CROP_H=400, OUT_W=600, OUT_H=800;   // 3:4
+
+function startPhotoUpload(key){
+  cropState.targetKey=key;
+  const inp=document.createElement('input');inp.type='file';inp.accept='image/*';
+  inp.onchange=()=>{
+    const file=inp.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{openCropper(img);};
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  inp.click();
+}
+
+function openCropper(img){
+  cropState.img=img;cropState.bright=100;cropState.angle=0;cropState.quarter=0;
+  const coverScale=Math.max(CROP_W/img.width, CROP_H/img.height);
+  cropState.min=coverScale;cropState.scale=coverScale;
+  cropState.ox=0;cropState.oy=0;   // offset from centre now
+  const zoom=document.getElementById('cropZoom');
+  // allow zooming from slightly under "cover" up to 8x cover for fine framing
+  const lo=coverScale*0.6, hi=coverScale*8;
+  zoom.min=lo.toFixed(4);zoom.max=hi.toFixed(4);zoom.step=((hi-lo)/200).toFixed(5);zoom.value=coverScale;
+  document.getElementById('cropBright').value=100;
+  document.getElementById('cropAngle').value=0;
+  document.getElementById('cropOverlay').classList.add('open');
+  drawCrop();
+}
+
+// Draw the image centre-anchored with rotation (quarter turns + fine angle),
+// scale, brightness and pan offset, into a target context at the given scale k.
+function paintImage(ctx,k){
+  const i=cropState.img;
+  const totalAngle=(cropState.quarter*90+cropState.angle)*Math.PI/180;
+  ctx.save();
+  ctx.filter=`brightness(${cropState.bright}%)`;
+  ctx.translate((CROP_W/2+cropState.ox)*k,(CROP_H/2+cropState.oy)*k);
+  ctx.rotate(totalAngle);
+  ctx.scale(cropState.scale*k,cropState.scale*k);
+  ctx.drawImage(i,-i.width/2,-i.height/2);
+  ctx.restore();
+}
+function drawCrop(){
+  const c=document.getElementById('cropCanvas');const ctx=c.getContext('2d');
+  c.width=CROP_W;c.height=CROP_H;
+  ctx.clearRect(0,0,CROP_W,CROP_H);
+  paintImage(ctx,1);
+}
+function clampCrop(){ /* free panning allowed with rotation; no clamping */ }
+(function bindCrop(){
+  const c=document.getElementById('cropCanvas');
+  const down=(x,y)=>{cropState.dragging=true;cropState.lastX=x;cropState.lastY=y;};
+  const move=(x,y)=>{if(!cropState.dragging)return;cropState.ox+=(x-cropState.lastX);cropState.oy+=(y-cropState.lastY);cropState.lastX=x;cropState.lastY=y;drawCrop();};
+  const up=()=>{cropState.dragging=false;};
+  c.addEventListener('mousedown',e=>down(e.offsetX,e.offsetY));
+  window.addEventListener('mousemove',e=>{if(cropState.dragging){const r=c.getBoundingClientRect();move(e.clientX-r.left,e.clientY-r.top);}});
+  window.addEventListener('mouseup',up);
+  c.addEventListener('touchstart',e=>{const r=c.getBoundingClientRect();down(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);},{passive:true});
+  c.addEventListener('touchmove',e=>{const r=c.getBoundingClientRect();move(e.touches[0].clientX-r.left,e.touches[0].clientY-r.top);e.preventDefault();},{passive:false});
+  c.addEventListener('touchend',up);
+  c.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const zoom=document.getElementById('cropZoom');
+    const lo=parseFloat(zoom.min),hi=parseFloat(zoom.max);
+    let ns=cropState.scale*(e.deltaY<0?1.08:0.926);
+    ns=Math.max(lo,Math.min(hi,ns));
+    cropState.scale=ns;zoom.value=ns;drawCrop();
+  },{passive:false});
+  document.getElementById('cropZoom').oninput=e=>{cropState.scale=parseFloat(e.target.value);drawCrop();};
+  document.getElementById('cropBright').oninput=e=>{cropState.bright=parseInt(e.target.value);drawCrop();};
+  document.getElementById('cropAngle').oninput=e=>{cropState.angle=parseInt(e.target.value);drawCrop();};
+  document.getElementById('cropRotL').onclick=()=>{cropState.quarter=(cropState.quarter+3)%4;drawCrop();};
+  document.getElementById('cropRotR').onclick=()=>{cropState.quarter=(cropState.quarter+1)%4;drawCrop();};
+})();
+document.getElementById('cropCancel').onclick=()=>document.getElementById('cropOverlay').classList.remove('open');
+document.getElementById('cropSave').onclick=async()=>{
+  const out=document.createElement('canvas');out.width=OUT_W;out.height=OUT_H;
+  const ctx=out.getContext('2d');
+  ctx.fillStyle='#222';ctx.fillRect(0,0,OUT_W,OUT_H);
+  paintImage(ctx,OUT_W/CROP_W);
+  const dataUrl=out.toDataURL('image/jpeg',0.85);
+  const [gid,pidx]=cropState.targetKey.split(':');
+  try{await api.put('/api/album/'+gid+'/'+pidx,{photo:dataUrl});
+    document.getElementById('cropOverlay').classList.remove('open');
+    toast('Photo saved');await loadAlbum();
+  }catch(e){toast('Save failed: '+e.message);}
+};
+
+/* ---------- GUEST PROFILE ---------- */
+let profData=null;
+async function openProfile(key){
+  const [gid,pidx]=key.split(':');
+  profData=await api.get('/api/album/'+gid+'/'+pidx);
+  document.getElementById('profName').textContent=profData.displayName;
+  document.getElementById('profSub').textContent=`Villa ${profData.villa||'—'} · ${profData.isLead?'Main guest':(profData.role==='child'?'Child':'Guest')}`;
+  renderProfile();
+  document.getElementById('profOverlay').classList.add('open');
+  document.getElementById('profPanel').classList.add('open');
+}
+function closeProfile(){document.getElementById('profOverlay').classList.remove('open');document.getElementById('profPanel').classList.remove('open');}
+document.getElementById('profClose').onclick=closeProfile;
+document.getElementById('profOverlay').onclick=closeProfile;
+
+function renderProfile(){
+  const p=profData;
+  document.getElementById('profBody').innerHTML=`
+    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:18px">
+      <div style="position:relative">
+        ${p.photo?`<img src="${p.photo}" class="prof-photo">`:`<div class="prof-photo" style="display:grid;place-items:center;font-size:40px;color:var(--ink-soft);font-family:'Cormorant Garamond',serif">${esc((p.displayName[0]||'?').toUpperCase())}</div>`}
+      </div>
+      <div style="flex:1">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          ${p.hm?'<span class="badge fb">♡ Honeymoon</span>':''}
+          ${p.anniversary?'<span class="badge hb">⚭ Anniversary</span>':''}
+          ${p.repeater?`<span class="badge aip">★ ${esc(p.repeater_count||'Repeater')}</span>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--ink-soft);line-height:1.7">
+          <div>Booking: ${esc(p.bookingName||'')}</div>
+          <div>Arrival: ${esc(p.arrival||'—')} · Departure: ${esc(p.departure||'—')}</div>
+          <div>Meal plan: ${esc(p.meal_plan||'—')}</div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" id="profChangePhoto">${p.photo?'Change Photo':'Add Photo'}</button>
+          ${p.photo?'<button class="btn btn-ghost btn-sm" id="profDlPhoto">⬇ Download</button>':''}
+          ${p.photo?'<button class="btn btn-ghost btn-sm" id="profDelPhoto">Remove</button>':''}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Preferences</div>
+    <div class="field"><label>Allergies</label><textarea id="pf_allergies" rows="2">${esc(p.allergies||'')}</textarea></div>
+    <div class="field"><label>Likes / Preferences</label><textarea id="pf_likes" rows="2">${esc(p.likes||'')}</textarea></div>
+    <div class="field"><label>Occasions (birthday, anniversary…)</label><textarea id="pf_occasions" rows="2">${esc(p.occasions||'')}</textarea></div>
+
+    <div class="section-title">Comments</div>
+    <div class="field"><textarea id="pf_comments" rows="3" placeholder="General notes about this guest…">${esc(p.comments||'')}</textarea></div>
+
+    <div class="section-title">History — this stay</div>
+    <div class="field"><textarea id="pf_history" rows="4" placeholder="Log of what happened during the stay…">${esc(p.history||'')}</textarea></div>
+
+    <button class="btn btn-primary btn-sm" style="width:auto" id="profSave">Save Profile</button>
+  `;
+  // textareas use the field input styling
+  document.getElementById('profBody').querySelectorAll('textarea').forEach(t=>{t.style.width='100%';t.style.border='1px solid var(--line)';t.style.borderRadius='9px';t.style.padding='9px 11px';t.style.fontFamily='Jost';t.style.fontSize='13px';t.style.resize='vertical';});
+  const cp=document.getElementById('profChangePhoto');if(cp)cp.onclick=()=>startPhotoUpload(`${p.guest_id}:${p.person_index}`);
+  const dlp=document.getElementById('profDlPhoto');if(dlp)dlp.onclick=()=>downloadSinglePhoto(p);
+  const dp=document.getElementById('profDelPhoto');if(dp)dp.onclick=async()=>{
+    if(!confirm('Remove this photo?'))return;
+    await api.del('/api/album/'+p.guest_id+'/'+p.person_index+'/photo');toast('Photo removed');
+    profData.photo=null;renderProfile();loadAlbum();
+  };
+  document.getElementById('profSave').onclick=async()=>{
+    const patch={allergies:val('pf_allergies'),likes:val('pf_likes'),occasions:val('pf_occasions'),comments:val('pf_comments'),history:val('pf_history')};
+    await api.put('/api/album/'+p.guest_id+'/'+p.person_index,patch);
+    Object.assign(profData,patch);toast('Profile saved');
+  };
+  function val(id){return document.getElementById(id).value;}
+}
+
+/* ---------- DEPARTURE LETTERS ---------- */
+document.getElementById('genAllLetters').onclick=()=>{
+  openModal(`<h3>Generate All Departure Letters</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">One combined file, one letter per page. Which group and format?</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="seg" style="width:100%"><button id="gaToday" class="on" style="flex:1">Departing Today</button><button id="gaTomorrow" style="flex:1">Departing Tomorrow</button></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-coral btn-sm" style="flex:1" id="gaPdf">⬇ PDF</button>
+        <button class="btn btn-gold btn-sm" style="flex:1" id="gaWord">⬇ Word</button>
+      </div>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
+      let when='today';
+      document.getElementById('gaToday').onclick=()=>{when='today';document.getElementById('gaToday').classList.add('on');document.getElementById('gaTomorrow').classList.remove('on');};
+      document.getElementById('gaTomorrow').onclick=()=>{when='tomorrow';document.getElementById('gaTomorrow').classList.add('on');document.getElementById('gaToday').classList.remove('on');};
+      const go=(fmt)=>{window.open('/api/departure-letters/export-all?when='+when+'&format='+fmt+'&dayId='+state.dayId,'_blank');closeModal();};
+      document.getElementById('gaPdf').onclick=()=>go('pdf');
+      document.getElementById('gaWord').onclick=()=>go('docx');
+    });
+};
+
+let depLetterGuest=null, depDraft=null;
+async function openDepartureLetter(guestId){
+  const d=await api.get('/api/guests/'+guestId);
+  depLetterGuest=d.guest;
+  const g=depLetterGuest;
+  depDraft={
+    name:g.name,
+    transport_type:g.transport_type||'seaplane',
+    destination_type:g.destination_type||'international',
+    luggage_time:g.luggage_time||'',checkout_time:g.checkout_time||'',transfer_time:g.transfer_time||'',
+    departure_flight:g.departure_flight||'',intl_flight_time:g.intl_flight_time||'',next_destination:g.next_destination||'',
+    signatory:'silvia',
+  };
+  document.getElementById('docEditTitle').textContent='Departure Letter — Villa '+(g.villa||'');
+  renderDepEditor();
+  document.getElementById('docEditor').classList.add('open');
+  // repurpose the doc editor export buttons
+  document.getElementById('docExportWord').onclick=()=>exportDepLetter('docx');
+  document.getElementById('docExportPdf').onclick=()=>exportDepLetter('pdf');
+  document.getElementById('docEditSave').onclick=async()=>{await saveDepFields();document.getElementById('docEditor').classList.remove('open');};
+  document.getElementById('docResetOverride').classList.add('hidden');
+}
+
+function renderDepEditor(){
+  const d=depDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  document.getElementById('docForm').innerHTML=`
+    <div class="doc-edit-note">Set the departure details below — the letter updates live. Saving also stores these on the booking.</div>
+    <div class="tpl-field"><label>Guest Name</label><input id="dl_name" value="${esc(d.name)}"></div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Transport</label><select id="dl_transport_type">
+        <option value="seaplane" ${d.transport_type==='seaplane'?'selected':''}>Seaplane</option>
+        <option value="speedboat" ${d.transport_type==='speedboat'?'selected':''}>Speedboat</option></select></div>
+      <div class="tpl-field"><label>Destination</label><select id="dl_destination_type">
+        <option value="international" ${d.destination_type==='international'?'selected':''}>International flight</option>
+        <option value="local" ${d.destination_type==='local'?'selected':''}>Local (resort/island)</option></select></div>
+      <div class="tpl-field"><label>Luggage Collection</label><input id="dl_luggage_time" value="${esc(d.luggage_time)}" placeholder="09:30"></div>
+      <div class="tpl-field"><label>Checkout Time</label><input id="dl_checkout_time" value="${esc(d.checkout_time)}" placeholder="11:00"></div>
+      <div class="tpl-field"><label>Seaplane/Speedboat Time</label><input id="dl_transfer_time" value="${esc(d.transfer_time)}" placeholder="12:15"></div>
+      <div class="tpl-field" id="dl_intlwrap"><label>Intl Flight + Time</label>
+        <div style="display:flex;gap:6px"><input id="dl_departure_flight" value="${esc(d.departure_flight)}" placeholder="EK661"><input id="dl_intl_flight_time" value="${esc(d.intl_flight_time)}" placeholder="18:25"></div></div>
+      <div class="tpl-field" id="dl_nextwrap"><label>Next Destination</label><input id="dl_next_destination" value="${esc(d.next_destination)}" placeholder="Gili Lankanfushi"></div>
+    </div>
+    <div class="tpl-field"><label>Signatory</label><select id="dl_signatory">${sigOpts}</select></div>
+  `;
+  ['name','luggage_time','checkout_time','transfer_time','departure_flight','intl_flight_time','next_destination'].forEach(k=>{
+    const el=document.getElementById('dl_'+k);if(el)el.oninput=()=>{d[k]=el.value;refreshDepPreview();};});
+  ['transport_type','destination_type','signatory'].forEach(k=>{
+    const el=document.getElementById('dl_'+k);if(el)el.onchange=()=>{d[k]=el.value;toggleDepFields();refreshDepPreview();};});
+  toggleDepFields();refreshDepPreview();
+}
+function toggleDepFields(){
+  const local=depDraft.destination_type==='local';
+  document.getElementById('dl_intlwrap').style.display=local?'none':'';
+  document.getElementById('dl_nextwrap').style.display=local?'':'none';
+}
+async function refreshDepPreview(){
+  try{
+    const r=await api.post('/api/departure-letter/'+depLetterGuest.id+'/preview',{fields:depDraft});
+    const t=r.template;const sig=state.signatories[depDraft.signatory]||{name:'',title:''};
+    let h='';
+    if(t.topDateText)h+=`<div class="pl" style="text-align:right">${esc(t.topDateText)}</div>`;
+    h+=`<div class="pl" style="text-align:left">Dear ${esc(depDraft.name||'[name]')},</div>`;
+    (t.body||[]).forEach(b=>{const bullet=b.startsWith('•');h+=`<div class="pl ${bullet?'bullet':''}" style="text-align:left">${fmtInline(b)}</div>`;});
+    if(t.note)h+=`<div class="pl i" style="text-align:left">${fmtInline(t.note)}</div>`;
+    h+=`<div class="pl" style="text-align:left;margin-top:18px">${esc(t.signoff)}</div>`;
+    h+=`<div class="pl" style="text-align:left">${esc(sig.name)}</div><div class="pl" style="text-align:left">${esc(sig.title)}</div><div class="pl" style="text-align:left">${esc(t.resortLine||'')}</div>`;
+    document.getElementById('docPaper').innerHTML=h;
+  }catch(e){}
+}
+function refDateOfDay(){const d=state.days.find(x=>x.id==state.dayId);return d?d.the_date:new Date().toISOString().slice(0,10);}
+
+async function saveDepFields(){
+  // persist the departure fields onto the booking (admin only will succeed for locked fields)
+  const patch={transport_type:depDraft.transport_type,destination_type:depDraft.destination_type,
+    luggage_time:depDraft.luggage_time,checkout_time:depDraft.checkout_time,transfer_time:depDraft.transfer_time,
+    departure_flight:depDraft.departure_flight,intl_flight_time:depDraft.intl_flight_time,next_destination:depDraft.next_destination,name:depDraft.name};
+  try{await api.put('/api/guests/'+depLetterGuest.id,patch);toast('Saved');}catch(e){toast(e.message);}
+}
+function exportDepLetter(fmt){
+  const ov=encodeURIComponent(JSON.stringify(depDraft));
+  window.open('/api/departure-letter/'+depLetterGuest.id+'/export?format='+fmt+'&dayId='+state.dayId+'&ov='+ov,'_blank');
+}
+
+/* ---------- VIEWS ---------- */
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  const v=b.dataset.view;['guests','documents','album','templates','admin'].forEach(x=>document.getElementById('view-'+x).classList.toggle('hidden',x!==v));
+  if(v==='documents')loadDocuments();if(v==='admin')loadUsers();if(v==='templates')loadTemplateList();if(v==='album')loadAlbum();
 });
+async function loadDocuments(){
+  const docs=await api.get('/api/documents');
+  document.getElementById('dbody').innerHTML=docs.length?docs.map(d=>{
+    const tpl=state.templates.find(t=>t.id===d.template_id)||{label:d.template_id};
+    return `<tr><td>${esc(tpl.label)}</td><td>${esc(d.guest_name)}</td><td>${esc(d.villa)}</td>
+      <td><span class="dstat ${d.status}">${d.status}</span></td><td style="font-size:12px;color:var(--ink-soft)">${esc((d.updated_at||'').slice(0,16))}</td>
+      <td><button class="btn btn-gold btn-sm" onclick="window.open('/api/documents/${d.id}/export?format=docx')">Word</button>
+      <button class="btn btn-coral btn-sm" onclick="window.open('/api/documents/${d.id}/export?format=pdf')">PDF</button></td></tr>`;
+  }).join('') : '<tr><td colspan="6"><div class="empty">No documents created yet.</div></td></tr>';
+}
+
+/* ---------- ADMIN ---------- */
+async function loadUsers(){
+  const users=await api.get('/api/users');
+  document.getElementById('userList').innerHTML=users.map(u=>`
+    <div class="userrow"><div><strong>${esc(u.display_name||u.username)}</strong>
+      <span style="color:var(--ink-soft);font-size:12px">@${esc(u.username)}</span>
+      <span class="ur-role">${u.role}</span>
+      ${u.can_manage_templates?'<span class="ur-role" style="background:var(--gold-soft);color:var(--gold)">templates</span>':''}</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <label style="font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:5px;cursor:pointer">
+        <input type="checkbox" ${u.can_manage_templates?'checked':''} onchange="toggleTpl(${u.id},this.checked)"> Manage templates</label>
+      <button class="btn btn-ghost btn-sm" onclick="resetPwd(${u.id},'${esc(u.username)}')">Reset Password</button>
+      ${u.id!==state.user.id?`<button class="btn btn-ghost btn-sm" onclick="delUser(${u.id})">Delete</button>`:''}
+    </div></div>`).join('');
+}
+window.toggleTpl=async(id,val)=>{await api.post('/api/users/'+id+'/capabilities',{can_manage_templates:val});toast('Updated');};
+document.getElementById('addUserBtn').onclick=()=>openModal(`
+  <h3>Add Staff Account</h3>
+  <div class="field"><label>Display Name</label><input id="auName"></div>
+  <div class="field"><label>Username</label><input id="auUser"></div>
+  <div class="field"><label>Password</label><input id="auPass" type="text"></div>
+  <div class="field"><label>Role</label><select id="auRole"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+  <div class="field"><label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-size:13px;cursor:pointer">
+    <input type="checkbox" id="auTpl"> Can create &amp; edit document templates</label></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="auSave">Create</button></div>`,()=>{
+    document.getElementById('auSave').onclick=async()=>{
+      try{await api.post('/api/users',{display_name:document.getElementById('auName').value,
+        username:document.getElementById('auUser').value,password:document.getElementById('auPass').value,
+        role:document.getElementById('auRole').value,can_manage_templates:document.getElementById('auTpl').checked});
+        closeModal();loadUsers();toast('Account created');}
+      catch(e){toast(e.message);}
+    };
+  });
+window.resetPwd=(id,uname)=>openModal(`
+  <h3>Reset Password</h3><p style="color:var(--ink-soft);margin-bottom:14px">for @${uname}</p>
+  <div class="field"><label>New Password</label><input id="rpPass" type="text"></div>
+  <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
+  <button class="btn btn-primary btn-sm" style="width:auto" id="rpSave">Update</button></div>`,()=>{
+    document.getElementById('rpSave').onclick=async()=>{
+      await api.post('/api/users/'+id+'/password',{password:document.getElementById('rpPass').value});closeModal();toast('Password updated');};
+  });
+window.delUser=async(id)=>{if(confirm('Delete this account?')){await api.del('/api/users/'+id);loadUsers();toast('Deleted');}};
+
+/* ---------- TEMPLATE BUILDER ---------- */
+let tplDraft=null, tplEditKey=null;
+
+async function loadTemplateList(){
+  const data=await api.get('/api/manage/templates');
+  state.signatories=data.signatories;
+  const groups={};data.templates.forEach(t=>{(groups[t.category]=groups[t.category]||[]).push(t);});
+  const wrap=document.getElementById('tplList');
+  wrap.innerHTML=Object.keys(groups).sort().map(cat=>`
+    <div class="tpl-cat-head">${esc(cat)}</div>
+    ${groups[cat].map(t=>`
+      <div class="tpl-row ${t.archived?'archived':''}">
+        <span class="tpl-cat">${esc(t.category)}</span>
+        <div class="tpl-name">${esc(t.label)}
+          <div class="tpl-meta">${t.hasDate?'has date · ':''}signatory: ${esc((state.signatories[t.signatory]||{}).name||t.signatory)}${t.archived?' · archived':''}
+            ${(t.languages&&t.languages.length>1)?'· langs: '+t.languages.map(l=>l.toUpperCase()).join(', '):'· EN only'}</div>
+        </div>
+        <div class="tpl-actions">
+          <button class="btn btn-ghost btn-sm" onclick="editTemplate('${t.id}')">Edit</button>
+          <button class="btn btn-ghost btn-sm" onclick="dupTemplate('${t.id}')">Duplicate</button>
+          <button class="btn btn-ghost btn-sm" onclick="archiveTemplate('${t.id}',${t.archived?0:1})">${t.archived?'Restore':'Archive'}</button>
+        </div>
+      </div>`).join('')}
+  `).join('') || '<div class="empty">No templates yet.</div>';
+}
+
+function blankDraft(){return{template_key:'',lang:'en',category:'General',label:'',intro:'',lead:'',
+  body:['**Benefit goes here**'],closing:'',contact:'',note:'',signoff:'Warmest regards,',
+  signatory:Object.keys(state.signatories)[0]||'silvia',hasDate:false,dateLabel:'',topDate:false};}
+
+document.getElementById('newTplBtn').onclick=()=>{tplEditKey=null;tplDraft=blankDraft();renderTplEditor('New Template');};
+window.editTemplate=async(key,lang)=>{lang=lang||'en';const t=await api.get('/api/templates/'+key+'?lang='+lang);tplEditKey=key;
+  tplDraft={template_key:t.id,lang:lang,category:t.category,label:t.label,intro:t.intro||'',lead:t.lead||'',
+    body:(t.body&&t.body.length?t.body:['']).slice(),closing:t.closing||'',contact:t.contact||'',note:t.note||'',
+    signoff:t.signoff||'Warmest regards,',signatory:t.signatory,hasDate:t.hasDate,dateLabel:t.dateLabel||'',topDate:t.topDate};
+  renderTplEditor((lang==='en'?'Edit: ':'Translate ['+lang.toUpperCase()+']: ')+t.label);};
+window.dupTemplate=async(key)=>{const r=await api.post('/api/manage/templates/'+key+'/duplicate');toast('Duplicated');loadTemplateList();editTemplate(r.template_key);};
+window.archiveTemplate=async(key,v)=>{await api.post('/api/manage/templates/'+key+'/archive',{archived:v});toast(v?'Archived':'Restored');loadTemplateList();};
+
+function renderTplEditor(title){
+  document.getElementById('tplEditTitle').textContent=title;
+  const d=tplDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  const langSel=tplEditKey?`<div class="tpl-field"><label>Editing language</label>
+    <select id="td_lang">${state.languages.map(l=>`<option value="${l.code}" ${d.lang===l.code?'selected':''}>${esc(l.en)} · ${esc(l.native)}</option>`).join('')}</select>
+    <div class="hint">English is the master. Pick another language to write/edit its translation. Untranslated languages start from the English text.</div></div>`:'';
+  document.getElementById('tplForm').innerHTML=`
+    ${langSel}
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Document Name</label><input id="td_label" value="${esc(d.label)}" placeholder="e.g. Water Villa Disclaimer"></div>
+      <div class="tpl-field"><label>Category</label><input id="td_category" value="${esc(d.category)}" placeholder="e.g. Disclaimers" list="catlist">
+        <datalist id="catlist">${[...new Set(state.templates.map(t=>t.category))].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+    </div>
+    <div class="tpl-field"><label>Opening line — “Dear {{name}},” is added automatically</label>
+      <textarea id="td_intro" placeholder="Thank you for choosing Constance Halaveli Maldives…">${esc(d.intro)}</textarea></div>
+    <div class="tpl-field"><label>Lead-in sentence (optional)</label>
+      <textarea id="td_lead" placeholder="We have the great pleasure to inform you that…">${esc(d.lead)}</textarea></div>
+
+    <div class="tpl-field"><label>Body lines</label>
+      <div id="bodyLines"></div>
+      <div class="insert-row">
+        <button class="chipbtn" id="addBodyLine">+ Add line</button>
+        <span style="flex:1"></span>
+        <button class="chipbtn" data-ins="{{name}}">Insert {{name}}</button>
+        <button class="chipbtn" data-ins="{{date}}">Insert {{date}}</button>
+        <button class="chipbtn" data-ins="{{confirmation}}">Insert {{confirmation}}</button>
+        <button class="chipbtn" data-ins="{{villa}}">Insert {{villa}}</button>
+      </div>
+      <div class="hint">Wrap text in **double asterisks** for bold, _underscores_ for italic. Start a line with • for a bullet.</div>
+    </div>
+
+    <div class="tpl-field"><label>Closing line (optional)</label><textarea id="td_closing">${esc(d.closing)}</textarea></div>
+    <div class="tpl-field"><label>Contact line (optional)</label><textarea id="td_contact">${esc(d.contact)}</textarea></div>
+    <div class="tpl-field"><label>Footnote (optional, shown small &amp; italic)</label><textarea id="td_note">${esc(d.note)}</textarea></div>
+
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Sign-off</label><input id="td_signoff" value="${esc(d.signoff)}"></div>
+      <div class="tpl-field"><label>Default Signatory</label><select id="td_signatory">${sigOpts}</select></div>
+    </div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label><input type="checkbox" id="td_hasDate" ${d.hasDate?'checked':''}> Ask for a date when creating</label>
+        <input id="td_dateLabel" value="${esc(d.dateLabel)}" placeholder="Date label, e.g. Booked on" style="margin-top:6px"></div>
+      <div class="tpl-field"><label><input type="checkbox" id="td_topDate" ${d.topDate?'checked':''}> Show date at top (certificate style)</label></div>
+    </div>
+  `;
+  renderBodyLines();
+  // wire inputs -> draft + preview
+  const map={td_label:'label',td_category:'category',td_intro:'intro',td_lead:'lead',td_closing:'closing',td_contact:'contact',td_note:'note',td_signoff:'signoff',td_dateLabel:'dateLabel'};
+  Object.entries(map).forEach(([id,key])=>{const el=document.getElementById(id);el.oninput=()=>{d[key]=el.value;refreshPreview();};});
+  document.getElementById('td_signatory').onchange=e=>{d.signatory=e.target.value;refreshPreview();};
+  document.getElementById('td_hasDate').onchange=e=>{d.hasDate=e.target.checked;refreshPreview();};
+  document.getElementById('td_topDate').onchange=e=>{d.topDate=e.target.checked;refreshPreview();};
+  const tdLang=document.getElementById('td_lang');
+  if(tdLang)tdLang.onchange=async e=>{
+    const nl=e.target.value;
+    // save current language first so edits aren't lost when switching
+    try{await api.put('/api/manage/templates/'+tplEditKey+'?lang='+d.lang,d);}catch(err){}
+    editTemplate(tplEditKey,nl);
+  };
+  document.getElementById('addBodyLine').onclick=()=>{d.body.push('');renderBodyLines();refreshPreview();};
+  document.querySelectorAll('[data-ins]').forEach(b=>b.onclick=()=>{
+    if(lastBody!=null){d.body[lastBody]=(d.body[lastBody]||'')+b.dataset.ins;renderBodyLines();refreshPreview();}
+    else toast('Click into a body line first');
+  });
+  document.getElementById('tplEditor').classList.add('open');
+  refreshPreview();
+}
+
+let lastBody=null;
+function renderBodyLines(){
+  const d=tplDraft;const box=document.getElementById('bodyLines');
+  box.innerHTML=d.body.map((ln,i)=>`
+    <div class="body-line">
+      <textarea data-i="${i}" placeholder="Body text…">${esc(ln)}</textarea>
+      <div class="lt"><button class="rm" data-rm="${i}" title="Remove">✕</button></div>
+    </div>`).join('');
+  box.querySelectorAll('textarea').forEach(t=>{
+    t.onfocus=()=>lastBody=+t.dataset.i;
+    t.oninput=()=>{d.body[+t.dataset.i]=t.value;refreshPreview();};
+  });
+  box.querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{d.body.splice(+b.dataset.rm,1);if(!d.body.length)d.body=[''];renderBodyLines();refreshPreview();});
+}
+
+function fmtInline(s){return esc(s).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/_([^_]+)_/g,'<em>$1</em>');}
+function refreshPreview(){
+  const d=tplDraft;const paper=document.getElementById('tplPaper');
+  const sig=state.signatories[d.signatory]||{name:'',title:''};
+  const sampleName='Mrs Kimura and Mr Mukai', sampleConf='419413056', sampleVilla='88', sampleDate='14th May 2026 at 19:00';
+  const fill=s=>s.replace(/\{\{name\}\}/g,sampleName).replace(/\{\{confirmation\}\}/g,sampleConf).replace(/\{\{villa\}\}/g,sampleVilla);
+  let h='';
+  if(d.topDate)h+=`<div class="pl" style="text-align:left">${esc(sampleDate)}</div>`;
+  h+=`<div class="pl">Dear ${esc(sampleName)},</div>`;
+  if(d.intro)h+=`<div class="pl">${fmtInline(fill(d.intro))}</div>`;
+  if(d.lead)h+=`<div class="pl">${fmtInline(fill(d.lead))}</div>`;
+  d.body.forEach(ln=>{
+    if(!ln)return;
+    let line=ln;
+    if(line.includes('{{date}}')){line=line.replace('{{date}}',d.hasDate?((d.dateLabel?d.dateLabel+' ':'')+sampleDate):'');if(!line.trim())return;}
+    line=fill(line);
+    const bullet=line.startsWith('•');
+    const bold=/^\*\*.*\*\*$/.test(line.trim());
+    const ital=/^_.*_$/.test(line.trim());
+    h+=`<div class="pl ${bullet?'bullet':''} ${bold?'b':''} ${ital?'i':''}">${fmtInline(line)}</div>`;
+  });
+  if(d.closing)h+=`<div class="pl">${fmtInline(fill(d.closing))}</div>`;
+  if(d.contact)h+=`<div class="pl">${fmtInline(fill(d.contact))}</div>`;
+  if(d.note)h+=`<div class="pl i">${fmtInline(fill(d.note))}</div>`;
+  h+=`<div class="pl" style="margin-top:24px">${esc(d.signoff||'')}</div>`;
+  h+=`<div class="pl">${esc(sig.name)}</div><div class="pl">${esc(sig.title)}</div>`;
+  h+=`<div class="pl conf">${esc(sampleConf)}</div>`;
+  paper.innerHTML=h;
+}
+
+document.getElementById('tplCancel').onclick=()=>document.getElementById('tplEditor').classList.remove('open');
+document.getElementById('tplSave').onclick=async()=>{
+  const d=tplDraft;
+  if(!d.label.trim())return toast('Give the document a name');
+  d.body=d.body.filter(l=>l!=null);
+  try{
+    if(tplEditKey){await api.put('/api/manage/templates/'+tplEditKey+'?lang='+(d.lang||'en'),d);}
+    else{const r=await api.post('/api/manage/templates',d);tplEditKey=r.template_key;}
+    // refresh the in-memory template list used by guest panel
+    const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
+    document.getElementById('tplEditor').classList.remove('open');
+    loadTemplateList();toast('Template saved');
+  }catch(e){toast(e.message);}
+};
+
+/* signatory management */
+document.getElementById('manageSignatoriesBtn').onclick=async()=>{
+  const sigs=await api.get('/api/manage/signatories');
+  openModal(`<h3>Signatories</h3>
+    <div id="sigList" style="margin-bottom:14px">${Object.entries(sigs).map(([k,v])=>`
+      <div class="userrow"><div><strong>${esc(v.name)}</strong><div style="font-size:12px;color:var(--ink-soft)">${esc(v.title)}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="delSig('${k}')">Remove</button></div>`).join('')}</div>
+    <div class="field"><label>Name</label><input id="sigName"></div>
+    <div class="field"><label>Title</label><input id="sigTitle"></div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary btn-sm" style="width:auto" id="sigSave">Add Signatory</button></div>`,()=>{
+      document.getElementById('sigSave').onclick=async()=>{
+        const name=document.getElementById('sigName').value,title=document.getElementById('sigTitle').value;
+        if(!name)return toast('Name required');
+        await api.post('/api/manage/signatories',{key:name,name,title});
+        const t=await api.get('/api/templates');state.signatories=t.signatories;
+        closeModal();toast('Signatory added');
+      };
+    });
+};
+window.delSig=async(k)=>{await api.del('/api/manage/signatories/'+k);const t=await api.get('/api/templates');state.signatories=t.signatories;toast('Removed');document.getElementById('manageSignatoriesBtn').click();};
+
+/* ---------- MODAL ---------- */
+function openModal(html,after){document.getElementById('modalInner').innerHTML=html;document.getElementById('modal').classList.add('open');if(after)after();}
+function closeModal(){document.getElementById('modal').classList.remove('open');}
+window.closeModal=closeModal;
+document.getElementById('modal').onclick=(e)=>{if(e.target.id==='modal')closeModal();};
+
+/* ---------- START ---------- */
+(async()=>{try{const d=await api.get('/api/me');state.user=d.user;await boot();}catch{showLogin();}})();
+</script>
+</body>
+</html>
