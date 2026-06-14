@@ -61,6 +61,7 @@ function buildDepartureTemplate(g, printDateISO) {
     lang: "en",
     topDateText: longDate(printed),   // exact printed date string at the top
     align: "left",                    // departure letters are left-aligned
+    letterheadSpace: 1400,            // top gap for the printed letterhead logo
     intro: "",
     lead: "",
     body,
