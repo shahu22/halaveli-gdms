@@ -63,27 +63,32 @@ function blank(spacingAfter = 160) {
 }
 
 // data: { name, confirmation, date, signatoryKey, signatories?, lang? }
-function buildDoc(template, data) {
+function buildDocChildren(template, data) {
   const lang = getLang(data.lang || template.lang || "en");
   RENDER = { font: lang.font, rtl: !!lang.rtl };
   const children = [];
   const sigMap = data.signatories || FALLBACK_SIGNATORIES;
   const sig = sigMap[data.signatoryKey || template.signatory] || Object.values(sigMap)[0] || { name: "", title: "" };
 
-  // Optional top date (e.g. complimentary-stay certificate)
-  if (template.topDate && data.date) {
-    children.push(para(data.date, { align: AlignmentType.LEFT, spacingAfter: 300 }));
+  // Default alignment for this document (vouchers center; letters left-align)
+  const baseAlign = template.align === "left" ? AlignmentType.LEFT : AlignmentType.CENTER;
+
+  // Optional top date. topDateText is an exact pre-formatted string (departure
+  // letters); otherwise fall back to data.date (certificates).
+  const topDateStr = template.topDateText || (template.topDate ? data.date : "");
+  if (topDateStr) {
+    children.push(para(topDateStr, { align: AlignmentType.RIGHT, spacingAfter: 360 }));
   }
 
   // Salutation
-  children.push(para(`Dear ${data.name},`, { spacingAfter: 300, size: 24 }));
+  children.push(para(`Dear ${data.name},`, { align: baseAlign, spacingAfter: 300, size: 24 }));
   children.push(blank());
 
   // Intro
-  if (template.intro) { children.push(para(template.intro, { spacingAfter: 260 })); }
+  if (template.intro) { children.push(para(template.intro, { align: baseAlign, spacingAfter: 260 })); }
 
   // Lead-in sentence
-  if (template.lead) { children.push(para(template.lead, { spacingAfter: 260 })); }
+  if (template.lead) { children.push(para(template.lead, { align: baseAlign, spacingAfter: 260 })); }
 
   // Body lines (substitute {{date}} where present)
   for (const raw of template.body || []) {
@@ -97,26 +102,29 @@ function buildDoc(template, data) {
     }
     const isBullet = line.startsWith("•");
     children.push(para(line, {
-      align: isBullet ? AlignmentType.LEFT : AlignmentType.CENTER,
-      spacingAfter: 160,
+      align: isBullet ? AlignmentType.LEFT : baseAlign,
+      spacingAfter: isBullet ? 90 : 220,
     }));
   }
   children.push(blank());
 
   // Closing
-  if (template.closing) { children.push(para(template.closing, { spacingAfter: 240 })); }
-  if (template.contact) { children.push(para(template.contact, { spacingAfter: 300 })); }
+  if (template.closing) { children.push(para(template.closing, { align: baseAlign, spacingAfter: 240 })); }
+  if (template.contact) { children.push(para(template.contact, { align: baseAlign, spacingAfter: 300 })); }
 
   // Optional note
   if (template.note) {
-    children.push(para(`_${template.note}_`, { spacingAfter: 240, size: 18 }));
+    children.push(para(`_${template.note}_`, { align: baseAlign, spacingAfter: 240, size: 18 }));
   }
 
   // Sign-off block
   children.push(blank(120));
-  children.push(para(template.signoff || "Warmest regards,", { spacingAfter: 360 }));
-  children.push(para(sig.name, { spacingAfter: 40 }));
-  children.push(para(sig.title, { spacingAfter: 400 }));
+  children.push(para(template.signoff || "Warmest regards,", { align: baseAlign, spacingAfter: 360 }));
+  children.push(para(sig.name, { align: baseAlign, spacingAfter: 40 }));
+  children.push(para(sig.title, { align: baseAlign, spacingAfter: template.resortLine ? 40 : 400 }));
+  if (template.resortLine) {
+    children.push(para(template.resortLine, { align: baseAlign, spacingAfter: 400 }));
+  }
 
   // Confirmation number, right-aligned at the foot
   if (data.confirmation) {
@@ -126,7 +134,11 @@ function buildDoc(template, data) {
       children: [new TextRun({ text: data.confirmation, size: 20, color: "555555" })],
     }));
   }
+  return children;
+}
 
+function buildDoc(template, data) {
+  const children = buildDocChildren(template, data);
   return new Document({
     styles: { default: { document: { run: { font: RENDER.font || "Calibri", size: 22 } } } },
     sections: [{ properties: { page: PAGE }, children }],
@@ -135,6 +147,22 @@ function buildDoc(template, data) {
 
 async function generateDocx(template, data, outPath) {
   const doc = buildDoc(template, data);
+  const buffer = await Packer.toBuffer(doc);
+  fs.writeFileSync(outPath, buffer);
+  return outPath;
+}
+
+// Build a single Document containing many letters, each on its own page.
+// items: [{ template, data }]
+async function generateMultiDocx(items, outPath) {
+  const docSections = items.map(({ template, data }) => ({
+    properties: { page: PAGE },
+    children: buildDocChildren(template, data),
+  }));
+  const doc = new Document({
+    styles: { default: { document: { run: { font: "Calibri", size: 22 } } } },
+    sections: docSections.length ? docSections : [{ properties: { page: PAGE }, children: [] }],
+  });
   const buffer = await Packer.toBuffer(doc);
   fs.writeFileSync(outPath, buffer);
   return outPath;
@@ -158,4 +186,4 @@ function convertToPdf(docxPath, outDir) {
   });
 }
 
-module.exports = { generateDocx, convertToPdf, buildDoc };
+module.exports = { generateDocx, generateMultiDocx, convertToPdf, buildDoc, buildDocChildren };
