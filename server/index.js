@@ -824,7 +824,9 @@ app.get("/api/departure-letter/:guestId/export", auth, async (req, res) => {
   const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.guestId);
   if (!g) return res.status(404).json({ error: "Not found" });
   const format = (req.query.format || "pdf").toLowerCase();
-  const printDate = req.query.printDate || refDateForDay(req.query.dayId);
+  // The date on the letter is the actual day it is printed (real today),
+  // NOT the business day / departure date.
+  const printDate = req.query.printDate || todayISO();
   const overrides = safeParse(decodeURIComponent(req.query.ov || "%7B%7D"), {});
   const merged = guestForLetter(g, overrides);
   let tpl = buildDepartureTemplate(merged, printDate);
@@ -853,9 +855,11 @@ app.get("/api/departure-letter/:guestId/export", auth, async (req, res) => {
 app.get("/api/departure-letters/export-all", auth, async (req, res) => {
   const when = req.query.when || "today";   // today | tomorrow
   const format = (req.query.format || "pdf").toLowerCase();
+  // 'target' selects WHICH guests (their departure date), based on business day.
   const ref = refDateForDay(req.query.dayId);
   const target = when === "tomorrow" ? addDays(ref, 1) : ref;
-  const printDate = target;
+  // 'printDate' is what prints on the letter = the actual day of printing (today).
+  const printDate = req.query.printDate || todayISO();
   const bookings = db.prepare(
     "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
   ).all().filter((b) => toISO(b.departure) === target);
