@@ -8,6 +8,7 @@ const fs = require("fs");
 const os = require("os");
 
 const { db, bcrypt, newToken, getTemplate, listTemplates, getSignatories, safeParse: dbSafeParse } = require("./db");
+const { LANGUAGES } = require("./languages");
 const P = require("./opera-parser");
 const { generateDocx, convertToPdf } = require("./doc-generator");
 
@@ -112,6 +113,7 @@ app.get("/api/templates", auth, (req, res) => {
     })),
     signatories: getSignatories(),
     canManage: req.user.role === "admin" || req.user.can_manage_templates,
+    languages: LANGUAGES,
   });
 });
 
@@ -745,7 +747,7 @@ app.get("/api/documents/:id/export", auth, async (req, res) => {
   // text for THIS document only (the shared template is untouched).
   const template = applyOverride(baseTemplate, fields.override);
 
-  const data = { ...fields, signatoryKey: doc.signatory, signatories: getSignatories() };
+  const data = { ...fields, signatoryKey: doc.signatory, signatories: getSignatories(), lang: doc.lang || "en" };
 
   const safe = (fields.name || "voucher").replace(/[^a-z0-9]+/gi, "_").slice(0, 40);
   const base = `${template.id}_${safe}_${doc.id}`;
