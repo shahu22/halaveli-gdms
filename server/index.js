@@ -10,7 +10,8 @@ const os = require("os");
 const { db, bcrypt, newToken, getTemplate, listTemplates, getSignatories, safeParse: dbSafeParse } = require("./db");
 const { LANGUAGES } = require("./languages");
 const P = require("./opera-parser");
-const { generateDocx, convertToPdf } = require("./doc-generator");
+const { generateDocx, generateMultiDocx, convertToPdf } = require("./doc-generator");
+const { buildDepartureTemplate } = require("./departure-letter");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -429,10 +430,12 @@ app.put("/api/guests/:id", auth, (req, res) => {
   // Per-field ownership (no blanket lock). These structural fields are
   // admin-only; everything else (name, meal plan, nationality, remarks, flags)
   // is editable by any logged-in staff member, including on in-house bookings.
-  const adminOnlyFields = ["arrival","departure","arrival_flight","departure_flight","villa","confirmation"];
+  const adminOnlyFields = ["arrival","departure","arrival_flight","departure_flight","villa","confirmation",
+    "transport_type","destination_type","luggage_time","checkout_time","transfer_time","next_destination","intl_flight_time"];
   const allowed = ["villa","villa_type","arrival","departure","arrival_flight","departure_flight",
     "meal_plan","nationality","confirmation","name","adults","children","hm","anniversary",
-    "repeater","repeater_count","remarks","list_type"];
+    "repeater","repeater_count","remarks","list_type",
+    "transport_type","destination_type","luggage_time","checkout_time","transfer_time","next_destination","intl_flight_time"];
 
   const sets = [], vals = [];
   for (const k of allowed) {
@@ -775,6 +778,107 @@ function applyOverride(tpl, ov) {
   if (Array.isArray(ov.body)) out.body = ov.body;
   return out;
 }
+
+// ============================================================================
+//  DEPARTURE LETTERS
+// ============================================================================
+// Merge any per-letter overrides (transport/destination/times) onto the guest
+// before building, so the letter can be tweaked at generation time.
+function guestForLetter(g, ov) {
+  const o = ov || {};
+  return {
+    ...g,
+    transport_type: o.transport_type || g.transport_type || "seaplane",
+    destination_type: o.destination_type || g.destination_type || "international",
+    luggage_time: o.luggage_time != null ? o.luggage_time : g.luggage_time,
+    checkout_time: o.checkout_time != null ? o.checkout_time : g.checkout_time,
+    transfer_time: o.transfer_time != null ? o.transfer_time : g.transfer_time,
+    next_destination: o.next_destination != null ? o.next_destination : g.next_destination,
+    departure_flight: o.departure_flight != null ? o.departure_flight : g.departure_flight,
+    intl_flight_time: o.intl_flight_time != null ? o.intl_flight_time : g.intl_flight_time,
+    departure_signatory: o.signatory || g.departure_signatory,
+  };
+}
+
+// Preview a departure letter as plain text (for the editor preview)
+app.post("/api/departure-letter/:guestId/preview", auth, (req, res) => {
+  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.guestId);
+  if (!g) return res.status(404).json({ error: "Not found" });
+  const body = req.body || {};
+  const merged = guestForLetter(g, body.fields);
+  let tpl = buildDepartureTemplate(merged, body.printDate || todayISO());
+  if (body.fields && body.fields.override) tpl = applyOverride(tpl, body.fields.override);
+  const sigs = getSignatories();
+  const sig = sigs[(body.fields && body.fields.signatory) || tpl.signatory] || Object.values(sigs)[0] || { name: "", title: "" };
+  const lines = [];
+  if (tpl.topDateText) lines.push(tpl.topDateText);
+  lines.push(`Dear ${(body.fields && body.fields.name) || g.name},`);
+  (tpl.body || []).forEach((b) => lines.push(b.replace(/\*\*/g, "").replace(/_/g, "")));
+  if (tpl.note) lines.push(tpl.note);
+  lines.push(tpl.signoff, sig.name, sig.title, tpl.resortLine);
+  res.json({ text: lines.filter(Boolean).join("\n\n"), template: tpl });
+});
+
+// Export a single departure letter (docx/pdf)
+app.get("/api/departure-letter/:guestId/export", auth, async (req, res) => {
+  const g = db.prepare("SELECT * FROM guests WHERE id=?").get(req.params.guestId);
+  if (!g) return res.status(404).json({ error: "Not found" });
+  const format = (req.query.format || "pdf").toLowerCase();
+  const printDate = req.query.printDate || refDateForDay(req.query.dayId);
+  const overrides = safeParse(decodeURIComponent(req.query.ov || "%7B%7D"), {});
+  const merged = guestForLetter(g, overrides);
+  let tpl = buildDepartureTemplate(merged, printDate);
+  if (overrides.override) tpl = applyOverride(tpl, overrides.override);
+  const data = {
+    name: (overrides.name) || g.name,
+    confirmation: "",
+    signatoryKey: overrides.signatory || tpl.signatory,
+    signatories: getSignatories(), lang: "en",
+  };
+  const safe = (data.name || "guest").replace(/[^a-z0-9]+/gi, "_").slice(0, 40);
+  const base = `departure_${g.villa || ""}_${safe}_${g.id}`;
+  const docxPath = path.join(OUT_DIR, base + ".docx");
+  try {
+    await generateDocx(tpl, data, docxPath);
+    if (format === "docx") return res.download(docxPath, base + ".docx");
+    const pdfPath = await convertToPdf(docxPath, OUT_DIR);
+    return res.download(pdfPath, base + ".pdf");
+  } catch (e) {
+    console.error("departure export error", e);
+    res.status(500).json({ error: "Export failed: " + e.message });
+  }
+});
+
+// Export ALL departure letters for a group (today/tomorrow) as one combined file
+app.get("/api/departure-letters/export-all", auth, async (req, res) => {
+  const when = req.query.when || "today";   // today | tomorrow
+  const format = (req.query.format || "pdf").toLowerCase();
+  const ref = refDateForDay(req.query.dayId);
+  const target = when === "tomorrow" ? addDays(ref, 1) : ref;
+  const printDate = target;
+  const bookings = db.prepare(
+    "SELECT * FROM guests WHERE list_type='inhouse' AND status!='departed' ORDER BY CAST(villa AS INTEGER), villa"
+  ).all().filter((b) => toISO(b.departure) === target);
+  if (!bookings.length) return res.status(404).json({ error: "No departures for " + when });
+
+  const sigs = getSignatories();
+  const items = bookings.map((g) => {
+    const merged = guestForLetter(g, null);
+    const tpl = buildDepartureTemplate(merged, printDate);
+    return { template: tpl, data: { name: g.name, confirmation: "", signatoryKey: tpl.signatory, signatories: sigs, lang: "en" } };
+  });
+  const base = `departure_letters_${when}_${printDate}`;
+  const docxPath = path.join(OUT_DIR, base + ".docx");
+  try {
+    await generateMultiDocx(items, docxPath);
+    if (format === "docx") return res.download(docxPath, base + ".docx");
+    const pdfPath = await convertToPdf(docxPath, OUT_DIR);
+    return res.download(pdfPath, base + ".pdf");
+  } catch (e) {
+    console.error("departure export-all error", e);
+    res.status(500).json({ error: "Export failed: " + e.message });
+  }
+});
 
 // Live preview (returns plain text rendering of the filled letter)
 app.post("/api/preview", auth, (req, res) => {
