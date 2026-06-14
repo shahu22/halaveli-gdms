@@ -276,7 +276,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.5</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.6</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -490,7 +490,7 @@ const api = {
   put:(u,b)=>api.req('PUT',u,b), del:(u)=>api.req('DELETE',u),
 };
 
-let state={user:null,days:[],dayId:null,listType:'arrival',guests:[],templates:[],signatories:{},search:''};
+let state={user:null,days:[],dayId:null,listType:'arrival',guests:[],templates:[],signatories:{},languages:[],search:''};
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -515,6 +515,7 @@ async function boot(){
   document.getElementById('newBookingBtn').classList.toggle('hidden',state.user.role!=='admin');
   state.isAdmin=state.user.role==='admin';
   const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
+  state.languages=t.languages||[{code:'en',en:'English',native:'English'}];
   state.canManage=!!t.canManage;
   document.getElementById('navTemplates').style.display=state.canManage?'':'none';
   await loadDays();
@@ -839,8 +840,10 @@ function renderDocList(){
   wrap.innerHTML=panelDocs.map(d=>{
     const tpl=state.templates.find(t=>t.id===d.template_id)||{label:d.template_id};
     const f=d.fields||{};
+    const langObj=(state.languages||[]).find(l=>l.code===(d.lang||'en'));
+    const langBadge=(d.lang&&d.lang!=='en')?`<span class="doc-count" style="background:var(--gold-soft);color:var(--gold)">${langObj?esc(langObj.native):d.lang.toUpperCase()}</span>`:'';
     return `<div class="doc" data-doc="${d.id}">
-      <div class="dh"><span class="dt">${esc(tpl.label)}</span>
+      <div class="dh"><span class="dt">${esc(tpl.label)} ${langBadge}</span>
         <span class="dstat ${d.status}">${d.status}</span></div>
       <label class="mini-label">Name on voucher</label>
       <input data-k="name" value="${esc(f.name||'')}">
@@ -888,11 +891,12 @@ async function openDocEditor(id){
     date:full.fields.date||'',
     confirmation:full.fields.confirmation||panelGuest.confirmation||'',
     signatory:full.signatory,
+    lang:full.lang||'en',
     intro:r.intro||'', lead:r.lead||'', body:(r.body||[]).slice(),
     closing:r.closing||'', contact:r.contact||'', note:r.note||'',
     signoff:r.signoff||'Warmest regards,',
     hasDate:r.hasDate, dateLabel:r.dateLabel||'', topDate:r.topDate,
-    label:r.label,
+    label:r.label, template_id:full.template_id,
   };
   document.getElementById('docEditTitle').textContent='Edit: '+r.label;
   renderDocEditor();
@@ -902,8 +906,11 @@ async function openDocEditor(id){
 function renderDocEditor(){
   const d=docDraft;
   const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  const langOpts=state.languages.map(l=>`<option value="${l.code}" ${d.lang===l.code?'selected':''}>${esc(l.en)} · ${esc(l.native)}</option>`).join('');
   document.getElementById('docForm').innerHTML=`
     <div class="doc-edit-note">Editing here changes <strong>only this guest's voucher</strong>. The master template stays unchanged. Use this to set timings, dates, or tweak wording for pre-confirmed bookings.</div>
+    <div class="tpl-field"><label>Language</label><select id="de_lang">${langOpts}</select>
+      <div class="hint">Switching language loads that language's template wording. If a language hasn't been translated yet, it falls back to English.</div></div>
     <div class="tpl-field"><label>Guest Name on Voucher</label><input id="de_name" value="${esc(d.name)}"></div>
     ${d.hasDate?`<div class="tpl-field"><label>${esc(d.dateLabel||'Date / Timing')}</label><input id="de_date" value="${esc(d.date)}" placeholder="e.g. 27th May 2026 at 19:00 – 20:30"></div>`:''}
     <div class="tpl-field"><label>Opening (“Dear …,” is added automatically)</label><textarea id="de_intro">${esc(d.intro)}</textarea></div>
@@ -923,6 +930,20 @@ function renderDocEditor(){
   const map={de_name:'name',de_date:'date',de_intro:'intro',de_lead:'lead',de_closing:'closing',de_contact:'contact',de_note:'note',de_signoff:'signoff'};
   Object.entries(map).forEach(([id,key])=>{const el=document.getElementById(id);if(el)el.oninput=()=>{d[key]=el.value;refreshDocPreview();};});
   document.getElementById('de_signatory').onchange=e=>{d.signatory=e.target.value;refreshDocPreview();};
+  document.getElementById('de_lang').onchange=async e=>{
+    const newLang=e.target.value;
+    if(!confirm('Load the '+newLang.toUpperCase()+' template wording? Any unsaved text edits in this editor will be replaced (name, date and signatory are kept).')){
+      e.target.value=d.lang;return;
+    }
+    d.lang=newLang;
+    try{
+      const t=await api.get('/api/templates/'+d.template_id+'?lang='+newLang);
+      d.intro=t.intro||'';d.lead=t.lead||'';d.body=(t.body||[]).slice();
+      d.closing=t.closing||'';d.contact=t.contact||'';d.note=t.note||'';
+      d.signoff=t.signoff||'Warmest regards,';d.dateLabel=t.dateLabel||'';
+      renderDocEditor();
+    }catch(err){toast(err.message);}
+  };
   document.getElementById('de_addLine').onclick=()=>{d.body.push('');renderDocBodyLines();refreshDocPreview();};
   refreshDocPreview();
 }
@@ -968,7 +989,7 @@ function docDraftToPayload(){
   // build override (content) + fields (name/date/confirmation)
   const override={intro:d.intro,lead:d.lead,body:d.body,closing:d.closing,contact:d.contact,note:d.note,signoff:d.signoff,dateLabel:d.dateLabel};
   const fields={name:d.name,date:d.date,confirmation:d.confirmation,override};
-  return {fields,signatory:d.signatory};
+  return {fields,signatory:d.signatory,lang:d.lang};
 }
 
 async function saveDocEdits(){
@@ -1429,7 +1450,8 @@ async function loadTemplateList(){
       <div class="tpl-row ${t.archived?'archived':''}">
         <span class="tpl-cat">${esc(t.category)}</span>
         <div class="tpl-name">${esc(t.label)}
-          <div class="tpl-meta">${t.hasDate?'has date · ':''}signatory: ${esc((state.signatories[t.signatory]||{}).name||t.signatory)}${t.archived?' · archived':''}</div>
+          <div class="tpl-meta">${t.hasDate?'has date · ':''}signatory: ${esc((state.signatories[t.signatory]||{}).name||t.signatory)}${t.archived?' · archived':''}
+            ${(t.languages&&t.languages.length>1)?'· langs: '+t.languages.map(l=>l.toUpperCase()).join(', '):'· EN only'}</div>
         </div>
         <div class="tpl-actions">
           <button class="btn btn-ghost btn-sm" onclick="editTemplate('${t.id}')">Edit</button>
@@ -1440,16 +1462,16 @@ async function loadTemplateList(){
   `).join('') || '<div class="empty">No templates yet.</div>';
 }
 
-function blankDraft(){return{template_key:'',category:'General',label:'',intro:'',lead:'',
+function blankDraft(){return{template_key:'',lang:'en',category:'General',label:'',intro:'',lead:'',
   body:['**Benefit goes here**'],closing:'',contact:'',note:'',signoff:'Warmest regards,',
   signatory:Object.keys(state.signatories)[0]||'silvia',hasDate:false,dateLabel:'',topDate:false};}
 
 document.getElementById('newTplBtn').onclick=()=>{tplEditKey=null;tplDraft=blankDraft();renderTplEditor('New Template');};
-window.editTemplate=async(key)=>{const t=await api.get('/api/templates/'+key);tplEditKey=key;
-  tplDraft={template_key:t.id,category:t.category,label:t.label,intro:t.intro||'',lead:t.lead||'',
+window.editTemplate=async(key,lang)=>{lang=lang||'en';const t=await api.get('/api/templates/'+key+'?lang='+lang);tplEditKey=key;
+  tplDraft={template_key:t.id,lang:lang,category:t.category,label:t.label,intro:t.intro||'',lead:t.lead||'',
     body:(t.body&&t.body.length?t.body:['']).slice(),closing:t.closing||'',contact:t.contact||'',note:t.note||'',
     signoff:t.signoff||'Warmest regards,',signatory:t.signatory,hasDate:t.hasDate,dateLabel:t.dateLabel||'',topDate:t.topDate};
-  renderTplEditor('Edit: '+t.label);};
+  renderTplEditor((lang==='en'?'Edit: ':'Translate ['+lang.toUpperCase()+']: ')+t.label);};
 window.dupTemplate=async(key)=>{const r=await api.post('/api/manage/templates/'+key+'/duplicate');toast('Duplicated');loadTemplateList();editTemplate(r.template_key);};
 window.archiveTemplate=async(key,v)=>{await api.post('/api/manage/templates/'+key+'/archive',{archived:v});toast(v?'Archived':'Restored');loadTemplateList();};
 
@@ -1457,7 +1479,11 @@ function renderTplEditor(title){
   document.getElementById('tplEditTitle').textContent=title;
   const d=tplDraft;
   const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  const langSel=tplEditKey?`<div class="tpl-field"><label>Editing language</label>
+    <select id="td_lang">${state.languages.map(l=>`<option value="${l.code}" ${d.lang===l.code?'selected':''}>${esc(l.en)} · ${esc(l.native)}</option>`).join('')}</select>
+    <div class="hint">English is the master. Pick another language to write/edit its translation. Untranslated languages start from the English text.</div></div>`:'';
   document.getElementById('tplForm').innerHTML=`
+    ${langSel}
     <div class="tpl-grid">
       <div class="tpl-field"><label>Document Name</label><input id="td_label" value="${esc(d.label)}" placeholder="e.g. Water Villa Disclaimer"></div>
       <div class="tpl-field"><label>Category</label><input id="td_category" value="${esc(d.category)}" placeholder="e.g. Disclaimers" list="catlist">
@@ -1502,6 +1528,13 @@ function renderTplEditor(title){
   document.getElementById('td_signatory').onchange=e=>{d.signatory=e.target.value;refreshPreview();};
   document.getElementById('td_hasDate').onchange=e=>{d.hasDate=e.target.checked;refreshPreview();};
   document.getElementById('td_topDate').onchange=e=>{d.topDate=e.target.checked;refreshPreview();};
+  const tdLang=document.getElementById('td_lang');
+  if(tdLang)tdLang.onchange=async e=>{
+    const nl=e.target.value;
+    // save current language first so edits aren't lost when switching
+    try{await api.put('/api/manage/templates/'+tplEditKey+'?lang='+d.lang,d);}catch(err){}
+    editTemplate(tplEditKey,nl);
+  };
   document.getElementById('addBodyLine').onclick=()=>{d.body.push('');renderBodyLines();refreshPreview();};
   document.querySelectorAll('[data-ins]').forEach(b=>b.onclick=()=>{
     if(lastBody!=null){d.body[lastBody]=(d.body[lastBody]||'')+b.dataset.ins;renderBodyLines();refreshPreview();}
@@ -1562,7 +1595,7 @@ document.getElementById('tplSave').onclick=async()=>{
   if(!d.label.trim())return toast('Give the document a name');
   d.body=d.body.filter(l=>l!=null);
   try{
-    if(tplEditKey){await api.put('/api/manage/templates/'+tplEditKey,d);}
+    if(tplEditKey){await api.put('/api/manage/templates/'+tplEditKey+'?lang='+(d.lang||'en'),d);}
     else{const r=await api.post('/api/manage/templates',d);tplEditKey=r.template_key;}
     // refresh the in-memory template list used by guest panel
     const t=await api.get('/api/templates');state.templates=t.templates;state.signatories=t.signatories;
