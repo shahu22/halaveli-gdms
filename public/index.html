@@ -276,7 +276,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.6</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.7</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -318,6 +318,7 @@
       <div class="toolbar">
         <input class="search" id="search" placeholder="Search name, villa, confirmation…">
         <button class="btn btn-ghost btn-sm hidden" id="exportDepPics">⬇ Export Departure Pictures</button>
+        <button class="btn btn-ghost btn-sm hidden" id="genAllLetters">⬇ Generate All Letters</button>
         <div class="seg" id="listSeg">
           <button data-lt="arrival" class="on">Arrivals</button>
           <button data-lt="inhouse">In-House</button>
@@ -596,7 +597,7 @@ document.getElementById('newBookingBtn').onclick=()=>openModal(`
 
 /* ---------- GUEST LIST ---------- */
 function syncListSeg(){document.querySelectorAll('#listSeg button').forEach(b=>b.classList.toggle('on',b.dataset.lt===state.listType));}
-document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();document.getElementById('exportDepPics').classList.toggle('hidden',state.listType!=='departure');await loadGuests();});
+document.querySelectorAll('#listSeg button').forEach(b=>b.onclick=async()=>{state.listType=b.dataset.lt;syncListSeg();document.getElementById('exportDepPics').classList.toggle('hidden',state.listType!=='departure');document.getElementById('genAllLetters').classList.toggle('hidden',state.listType!=='departure');await loadGuests();});
 document.getElementById('search').oninput=(e)=>{state.search=e.target.value;renderGuests();};
 
 async function loadGuests(){
@@ -634,6 +635,7 @@ function renderGuests(){
       <td style="white-space:nowrap">
         ${state.listType==='arrival'?`<button class="btn btn-coral btn-sm" data-checkin="${g.id}" style="margin-right:4px">Check In</button>`:''}
         ${(state.listType==='inhouse'||state.listType==='departure')?`<button class="btn btn-coral btn-sm" data-checkout="${g.id}" style="margin-right:4px">Check Out</button>`:''}
+        ${state.listType==='departure'?`<button class="btn btn-gold btn-sm" data-depletter="${g.id}" style="margin-right:4px">Letter</button>`:''}
         ${(state.listType==='checkedout'&&state.isAdmin)?`<button class="btn btn-ghost btn-sm" data-undo="${g.id}" style="margin-right:4px">Undo</button>`:''}
         <button class="linkbtn" data-open="${g.id}">Open</button></td>
     </tr>`;
@@ -683,6 +685,7 @@ function renderGuests(){
     try{await api.post('/api/guests/'+b.dataset.undo+'/undo-checkout');toast('Restored to In-House');await loadGuests();}
     catch(err){toast(err.message);}
   });
+  tb.querySelectorAll('[data-depletter]').forEach(b=>b.onclick=()=>openDepartureLetter(b.dataset.depletter));
   tb.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openGuest(b.dataset.open));
   // load doc counts
   rows.forEach(async g=>{
@@ -740,6 +743,25 @@ function renderPanel(){
     </div>
     <div class="field"><label>Remarks / Booking Notes</label>
       <textarea id="f_remarks" rows="3" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-family:Jost;font-size:13px;resize:vertical">${esc(g.remarks||'')}</textarea></div>
+
+    <div class="section-title">Departure Details <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(for the departure letter)</span></div>
+    <div class="grid2">
+      <div class="field"><label>Transport ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label>
+        <select id="f_transport_type" ${adminDis}>
+          <option value="seaplane" ${g.transport_type==='seaplane'?'selected':''}>Seaplane</option>
+          <option value="speedboat" ${g.transport_type==='speedboat'?'selected':''}>Speedboat</option>
+        </select></div>
+      <div class="field"><label>Destination ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label>
+        <select id="f_destination_type" ${adminDis}>
+          <option value="international" ${g.destination_type==='international'?'selected':''}>International flight</option>
+          <option value="local" ${g.destination_type==='local'?'selected':''}>Local (another resort/island)</option>
+        </select></div>
+      <div class="field"><label>Luggage Collection ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_luggage_time" value="${esc(g.luggage_time||'')}" placeholder="e.g. 09:30" ${adminDis}></div>
+      <div class="field"><label>Checkout Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_checkout_time" value="${esc(g.checkout_time||'')}" placeholder="e.g. 11:00" ${adminDis}></div>
+      <div class="field"><label>Seaplane/Speedboat Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_transfer_time" value="${esc(g.transfer_time||'')}" placeholder="e.g. 12:15" ${adminDis}></div>
+      <div class="field"><label>Intl Flight Time ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_intl_flight_time" value="${esc(g.intl_flight_time||'')}" placeholder="e.g. 18:25" ${adminDis}></div>
+      <div class="field" style="grid-column:1/-1"><label>Next Destination (if local) ${state.isAdmin?'':'<span style="color:var(--ink-soft)">(admin)</span>'}</label><input id="f_next_destination" value="${esc(g.next_destination||'')}" placeholder="e.g. Gili Lankanfushi" ${adminDis}></div>
+    </div>
 
     <div class="section-title">Guest Name <span style="font-size:12px;color:var(--ink-soft);font-family:Jost">(auto-formatted, editable)</span></div>
     <div class="preview" id="namePrev">${esc(g.name)}</div>
@@ -817,7 +839,7 @@ function buildNameEditor(){
 
 async function saveDetails(){
   const g=panelGuest;
-  const patch={};['villa','nationality','arrival','departure','arrival_flight','departure_flight','meal_plan','confirmation','name','remarks','repeater_count'].forEach(k=>{
+  const patch={};['villa','nationality','arrival','departure','arrival_flight','departure_flight','meal_plan','confirmation','name','remarks','repeater_count','transport_type','destination_type','luggage_time','checkout_time','transfer_time','intl_flight_time','next_destination'].forEach(k=>{
     const el=document.getElementById('f_'+k);if(el&&!el.disabled)patch[k]=el.value;});
   try{await api.put('/api/guests/'+g.id,patch);}catch(e){return toast(e.message);}
   Object.assign(g,patch);toast('Saved');
@@ -900,6 +922,12 @@ async function openDocEditor(id){
   };
   document.getElementById('docEditTitle').textContent='Edit: '+r.label;
   renderDocEditor();
+  // restore voucher-editor button bindings (the departure-letter editor reuses
+  // this overlay and rebinds these, so re-establish them each time we open)
+  document.getElementById('docResetOverride').classList.remove('hidden');
+  document.getElementById('docExportWord').onclick=()=>exportFromEditor('docx');
+  document.getElementById('docExportPdf').onclick=()=>exportFromEditor('pdf');
+  document.getElementById('docEditSave').onclick=async()=>{await saveDocEdits();document.getElementById('docEditor').classList.remove('open');};
   document.getElementById('docEditor').classList.add('open');
 }
 
@@ -1373,6 +1401,111 @@ function renderProfile(){
     Object.assign(profData,patch);toast('Profile saved');
   };
   function val(id){return document.getElementById(id).value;}
+}
+
+/* ---------- DEPARTURE LETTERS ---------- */
+document.getElementById('genAllLetters').onclick=()=>{
+  openModal(`<h3>Generate All Departure Letters</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">One combined file, one letter per page. Which group and format?</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="seg" style="width:100%"><button id="gaToday" class="on" style="flex:1">Departing Today</button><button id="gaTomorrow" style="flex:1">Departing Tomorrow</button></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-coral btn-sm" style="flex:1" id="gaPdf">⬇ PDF</button>
+        <button class="btn btn-gold btn-sm" style="flex:1" id="gaWord">⬇ Word</button>
+      </div>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
+      let when='today';
+      document.getElementById('gaToday').onclick=()=>{when='today';document.getElementById('gaToday').classList.add('on');document.getElementById('gaTomorrow').classList.remove('on');};
+      document.getElementById('gaTomorrow').onclick=()=>{when='tomorrow';document.getElementById('gaTomorrow').classList.add('on');document.getElementById('gaToday').classList.remove('on');};
+      const go=(fmt)=>{window.open('/api/departure-letters/export-all?when='+when+'&format='+fmt+'&dayId='+state.dayId,'_blank');closeModal();};
+      document.getElementById('gaPdf').onclick=()=>go('pdf');
+      document.getElementById('gaWord').onclick=()=>go('docx');
+    });
+};
+
+let depLetterGuest=null, depDraft=null;
+async function openDepartureLetter(guestId){
+  const d=await api.get('/api/guests/'+guestId);
+  depLetterGuest=d.guest;
+  const g=depLetterGuest;
+  depDraft={
+    name:g.name,
+    transport_type:g.transport_type||'seaplane',
+    destination_type:g.destination_type||'international',
+    luggage_time:g.luggage_time||'',checkout_time:g.checkout_time||'',transfer_time:g.transfer_time||'',
+    departure_flight:g.departure_flight||'',intl_flight_time:g.intl_flight_time||'',next_destination:g.next_destination||'',
+    signatory:'silvia',
+  };
+  document.getElementById('docEditTitle').textContent='Departure Letter — Villa '+(g.villa||'');
+  renderDepEditor();
+  document.getElementById('docEditor').classList.add('open');
+  // repurpose the doc editor export buttons
+  document.getElementById('docExportWord').onclick=()=>exportDepLetter('docx');
+  document.getElementById('docExportPdf').onclick=()=>exportDepLetter('pdf');
+  document.getElementById('docEditSave').onclick=async()=>{await saveDepFields();document.getElementById('docEditor').classList.remove('open');};
+  document.getElementById('docResetOverride').classList.add('hidden');
+}
+
+function renderDepEditor(){
+  const d=depDraft;
+  const sigOpts=Object.entries(state.signatories).map(([k,v])=>`<option value="${k}" ${d.signatory===k?'selected':''}>${esc(v.name)} — ${esc(v.title)}</option>`).join('');
+  document.getElementById('docForm').innerHTML=`
+    <div class="doc-edit-note">Set the departure details below — the letter updates live. Saving also stores these on the booking.</div>
+    <div class="tpl-field"><label>Guest Name</label><input id="dl_name" value="${esc(d.name)}"></div>
+    <div class="tpl-grid">
+      <div class="tpl-field"><label>Transport</label><select id="dl_transport_type">
+        <option value="seaplane" ${d.transport_type==='seaplane'?'selected':''}>Seaplane</option>
+        <option value="speedboat" ${d.transport_type==='speedboat'?'selected':''}>Speedboat</option></select></div>
+      <div class="tpl-field"><label>Destination</label><select id="dl_destination_type">
+        <option value="international" ${d.destination_type==='international'?'selected':''}>International flight</option>
+        <option value="local" ${d.destination_type==='local'?'selected':''}>Local (resort/island)</option></select></div>
+      <div class="tpl-field"><label>Luggage Collection</label><input id="dl_luggage_time" value="${esc(d.luggage_time)}" placeholder="09:30"></div>
+      <div class="tpl-field"><label>Checkout Time</label><input id="dl_checkout_time" value="${esc(d.checkout_time)}" placeholder="11:00"></div>
+      <div class="tpl-field"><label>Seaplane/Speedboat Time</label><input id="dl_transfer_time" value="${esc(d.transfer_time)}" placeholder="12:15"></div>
+      <div class="tpl-field" id="dl_intlwrap"><label>Intl Flight + Time</label>
+        <div style="display:flex;gap:6px"><input id="dl_departure_flight" value="${esc(d.departure_flight)}" placeholder="EK661"><input id="dl_intl_flight_time" value="${esc(d.intl_flight_time)}" placeholder="18:25"></div></div>
+      <div class="tpl-field" id="dl_nextwrap"><label>Next Destination</label><input id="dl_next_destination" value="${esc(d.next_destination)}" placeholder="Gili Lankanfushi"></div>
+    </div>
+    <div class="tpl-field"><label>Signatory</label><select id="dl_signatory">${sigOpts}</select></div>
+  `;
+  ['name','luggage_time','checkout_time','transfer_time','departure_flight','intl_flight_time','next_destination'].forEach(k=>{
+    const el=document.getElementById('dl_'+k);if(el)el.oninput=()=>{d[k]=el.value;refreshDepPreview();};});
+  ['transport_type','destination_type','signatory'].forEach(k=>{
+    const el=document.getElementById('dl_'+k);if(el)el.onchange=()=>{d[k]=el.value;toggleDepFields();refreshDepPreview();};});
+  toggleDepFields();refreshDepPreview();
+}
+function toggleDepFields(){
+  const local=depDraft.destination_type==='local';
+  document.getElementById('dl_intlwrap').style.display=local?'none':'';
+  document.getElementById('dl_nextwrap').style.display=local?'':'none';
+}
+async function refreshDepPreview(){
+  try{
+    const r=await api.post('/api/departure-letter/'+depLetterGuest.id+'/preview',{fields:depDraft,printDate:refDateOfDay()});
+    const t=r.template;const sig=state.signatories[depDraft.signatory]||{name:'',title:''};
+    let h='';
+    if(t.topDateText)h+=`<div class="pl" style="text-align:right">${esc(t.topDateText)}</div>`;
+    h+=`<div class="pl" style="text-align:left">Dear ${esc(depDraft.name||'[name]')},</div>`;
+    (t.body||[]).forEach(b=>{const bullet=b.startsWith('•');h+=`<div class="pl ${bullet?'bullet':''}" style="text-align:left">${fmtInline(b)}</div>`;});
+    if(t.note)h+=`<div class="pl i" style="text-align:left">${fmtInline(t.note)}</div>`;
+    h+=`<div class="pl" style="text-align:left;margin-top:18px">${esc(t.signoff)}</div>`;
+    h+=`<div class="pl" style="text-align:left">${esc(sig.name)}</div><div class="pl" style="text-align:left">${esc(sig.title)}</div><div class="pl" style="text-align:left">${esc(t.resortLine||'')}</div>`;
+    document.getElementById('docPaper').innerHTML=h;
+  }catch(e){}
+}
+function refDateOfDay(){const d=state.days.find(x=>x.id==state.dayId);return d?d.the_date:new Date().toISOString().slice(0,10);}
+
+async function saveDepFields(){
+  // persist the departure fields onto the booking (admin only will succeed for locked fields)
+  const patch={transport_type:depDraft.transport_type,destination_type:depDraft.destination_type,
+    luggage_time:depDraft.luggage_time,checkout_time:depDraft.checkout_time,transfer_time:depDraft.transfer_time,
+    departure_flight:depDraft.departure_flight,intl_flight_time:depDraft.intl_flight_time,next_destination:depDraft.next_destination,name:depDraft.name};
+  try{await api.put('/api/guests/'+depLetterGuest.id,patch);toast('Saved');}catch(e){toast(e.message);}
+}
+function exportDepLetter(fmt){
+  const ov=encodeURIComponent(JSON.stringify(depDraft));
+  window.open('/api/departure-letter/'+depLetterGuest.id+'/export?format='+fmt+'&dayId='+state.dayId+'&ov='+ov,'_blank');
 }
 
 /* ---------- VIEWS ---------- */
