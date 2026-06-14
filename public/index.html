@@ -254,6 +254,7 @@
   .prof-photo{width:120px;aspect-ratio:3/4;border-radius:12px;object-fit:cover;background:var(--sand-deep);box-shadow:var(--shadow)}
 </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 
@@ -275,7 +276,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="crest">H</div>
-      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.4</div></div>
+      <div><h2>Halaveli</h2><div class="tag">Guest Document System · v1.0.5</div></div>
     </div>
     <div class="nav" id="nav">
       <button data-view="guests" class="active">Guest Lists</button>
@@ -1024,28 +1025,45 @@ function renderAlbum(){
           <div class="pv">${p.isLead?'Main guest':esc(p.role==='child'?'Child':'Guest')}</div>
         </div>
         <div class="addbtn" data-add="${key}">${p.photo?'Change Photo':'＋ Add Photo'}</div>
+        ${p.photo?`<div class="addbtn" data-dl="${key}" style="margin-top:-6px;background:var(--sand-deep);color:var(--ink-soft)">⬇ Download</div>`:''}
       </div>`;
     });
   });
   grid.innerHTML=html;
   grid.querySelectorAll('[data-add]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();startPhotoUpload(b.dataset.add);});
+  grid.querySelectorAll('[data-dl]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();const p=albumPeople.find(x=>`${x.guest_id}:${x.person_index}`===b.dataset.dl);if(p)downloadSinglePhoto(p);});
   grid.querySelectorAll('[data-prof]').forEach(b=>b.onclick=()=>openProfile(b.dataset.prof));
 }
 document.getElementById('albumSearch').oninput=renderAlbum;
-document.getElementById('albumExport').onclick=()=>chooseExport('inhouse','In-House Album');
-document.getElementById('exportDepPics').onclick=()=>chooseExport('departure-tomorrow','Departures Tomorrow');
+document.getElementById('albumExport').onclick=()=>exportMenu('inhouse','In-House');
+document.getElementById('exportDepPics').onclick=()=>departureExportMenu();
 
-/* ---------- GRID EXPORT (PNG / PDF) ---------- */
-function chooseExport(mode,title){
+function departureExportMenu(){
+  openModal(`<h3>Export Departures</h3>
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Which departures, and in what format?</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-ghost btn-sm" id="depToday">Departures Today</button>
+      <button class="btn btn-ghost btn-sm" id="depTomorrow">Departures Tomorrow</button>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
+      document.getElementById('depToday').onclick=()=>{closeModal();exportMenu('departure-today','Departures Today');};
+      document.getElementById('depTomorrow').onclick=()=>{closeModal();exportMenu('departure-tomorrow','Departures Tomorrow');};
+    });
+}
+
+// Format chooser: grid PDF, grid PNG, or ZIP of individual photos
+function exportMenu(mode,title){
   openModal(`<h3>Export ${esc(title)}</h3>
-    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Choose a format. Each photo is labelled with room number and full name.</p>
-    <div class="row" style="justify-content:center">
-      <button class="btn btn-coral btn-sm" style="width:auto" id="exPdf">⬇ PDF</button>
-      <button class="btn btn-gold btn-sm" style="width:auto" id="exPng">⬇ PNG</button>
-      <button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button>
-    </div>`,()=>{
+    <p style="color:var(--ink-soft);font-size:13px;margin-bottom:16px">Choose what to export.</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-coral btn-sm" id="exPdf">⬇ Grid PDF</button>
+      <button class="btn btn-gold btn-sm" id="exPng">⬇ Grid PNG</button>
+      <button class="btn btn-primary btn-sm" id="exZip">⬇ All photos separately (ZIP)</button>
+    </div>
+    <div class="row"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancel</button></div>`,()=>{
       document.getElementById('exPdf').onclick=()=>{closeModal();runGridExport(mode,title,'pdf');};
       document.getElementById('exPng').onclick=()=>{closeModal();runGridExport(mode,title,'png');};
+      document.getElementById('exZip').onclick=()=>{closeModal();runZipExport(mode,title);};
     });
 }
 
@@ -1112,6 +1130,63 @@ async function runGridExport(mode,title,fmt){
     pdf.save(fname+'.pdf');
     toast('PDF exported');
   }
+}
+
+/* ---------- ZIP OF INDIVIDUAL PHOTOS ---------- */
+// Filename: "12 MR EDWARD JOHN" => room + TITLE + LAST + FIRST, uppercase.
+function photoFileName(p){
+  const parts=[p.villa||'', (p.title||'').toUpperCase(), (p.last||'').toUpperCase(), (p.first||'').toUpperCase()]
+    .map(s=>String(s).trim()).filter(Boolean);
+  let base=parts.join(' ').replace(/[\\/:*?"<>|]/g,'').trim();
+  if(!base)base=(p.displayName||'guest').toUpperCase();
+  return base;
+}
+// Make a 3:4 placeholder JPEG (data URL) with the guest's name on it.
+function placeholderPhoto(p){
+  const w=600,h=800;const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#ece2cf';ctx.fillRect(0,0,w,h);
+  ctx.fillStyle='#b8ab92';ctx.font='600 180px Georgia, serif';ctx.textAlign='center';
+  ctx.fillText((p.displayName[0]||'?').toUpperCase(),w/2,h/2-20);
+  ctx.fillStyle='#6f675a';ctx.font='400 34px Georgia, serif';
+  ctx.fillText('NO PHOTO',w/2,h/2+60);
+  ctx.fillStyle='#063e42';ctx.font='600 30px Georgia, serif';
+  let nm='Villa '+(p.villa||'—')+' · '+p.displayName;if(nm.length>34)nm=nm.slice(0,33)+'…';
+  ctx.fillText(nm,w/2,h-60);
+  return cv.toDataURL('image/jpeg',0.85);
+}
+function dataUrlToBlob(dataUrl){
+  const [head,b64]=dataUrl.split(',');const mime=head.match(/:(.*?);/)[1];
+  const bin=atob(b64);const len=bin.length;const arr=new Uint8Array(len);
+  for(let i=0;i<len;i++)arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type:mime});
+}
+
+async function runZipExport(mode,title){
+  toast('Building ZIP…');
+  const people=await api.get('/api/album-export?mode='+mode+'&dayId='+state.dayId);
+  if(!people.length){return toast('No guests to export.');}
+  const zip=new JSZip();
+  const stamp=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  const used={};
+  for(const p of people){
+    const dataUrl=p.photo||placeholderPhoto(p);
+    let name=photoFileName(p);
+    // avoid duplicate filenames
+    if(used[name]){used[name]++;name=name+' ('+used[name]+')';}else{used[name]=1;}
+    zip.file(name+'.jpg',dataUrlToBlob(dataUrl));
+  }
+  const folderName=`${title} - ${stamp}`;
+  const blob=await zip.generateAsync({type:'blob'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=folderName+'.zip';a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast('ZIP downloaded');
+}
+
+// Download a single guest's photo
+function downloadSinglePhoto(p){
+  if(!p.photo){return toast('No photo to download.');}
+  const a=document.createElement('a');a.href=p.photo;a.download=photoFileName(p)+'.jpg';a.click();
 }
 
 /* ---------- PHOTO UPLOAD + CROP ---------- */
@@ -1241,8 +1316,9 @@ function renderProfile(){
           <div>Arrival: ${esc(p.arrival||'—')} · Departure: ${esc(p.departure||'—')}</div>
           <div>Meal plan: ${esc(p.meal_plan||'—')}</div>
         </div>
-        <div style="margin-top:10px;display:flex;gap:6px">
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" id="profChangePhoto">${p.photo?'Change Photo':'Add Photo'}</button>
+          ${p.photo?'<button class="btn btn-ghost btn-sm" id="profDlPhoto">⬇ Download</button>':''}
           ${p.photo?'<button class="btn btn-ghost btn-sm" id="profDelPhoto">Remove</button>':''}
         </div>
       </div>
@@ -1264,6 +1340,7 @@ function renderProfile(){
   // textareas use the field input styling
   document.getElementById('profBody').querySelectorAll('textarea').forEach(t=>{t.style.width='100%';t.style.border='1px solid var(--line)';t.style.borderRadius='9px';t.style.padding='9px 11px';t.style.fontFamily='Jost';t.style.fontSize='13px';t.style.resize='vertical';});
   const cp=document.getElementById('profChangePhoto');if(cp)cp.onclick=()=>startPhotoUpload(`${p.guest_id}:${p.person_index}`);
+  const dlp=document.getElementById('profDlPhoto');if(dlp)dlp.onclick=()=>downloadSinglePhoto(p);
   const dp=document.getElementById('profDelPhoto');if(dp)dp.onclick=async()=>{
     if(!confirm('Remove this photo?'))return;
     await api.del('/api/album/'+p.guest_id+'/'+p.person_index+'/photo');toast('Photo removed');
